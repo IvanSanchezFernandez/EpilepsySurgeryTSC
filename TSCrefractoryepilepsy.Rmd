@@ -1,0 +1,3084 @@
+
+# Use of epilepsy surgery among patients with tuberous sclerosis complex and refractory epilepsy
+
+
+
+
+
+
+
+
+## 1. Preparation of software for analysis
+
+
+
+
+Install needed packages
+```{r}
+# install.packages("readr")
+library(readr)
+
+# install.packages("dplyr")
+library(dplyr)
+
+# install.packages("tidyr")
+library(tidyr)
+
+# install.packages("tibble")
+library(tibble)
+
+# install.packages("haven")
+library(haven)
+
+# install.packages("lubridate")
+library(lubridate)
+
+# install.packages("gmodels")
+library(gmodels)
+
+# install.packages("bazar")
+library(bazar)
+
+# install.packages("DescTools")
+library(DescTools)
+
+# install.packages("ggplot2")
+library(ggplot2)
+
+# install.packages("plotly")
+library(plotly)
+
+# install.packages("scales")
+library(scales)
+
+# install.packages("geepack")
+library(geepack)
+```
+
+
+
+
+
+
+
+
+## 2. Data ingestion
+
+
+
+
+Upload the relevant tables and sort by patient and discharge date and eliminate encounters earlier than 1/1/2004 and later than 12/31/2024
+```{r}
+# Patient abstract
+patient_abstract <- read_csv("\\\\rc-fs\\neuro-peters\\Private\\ch134560\\PHIS files\\TSC_epilepsy_surgery_final\\PatientAbstractPatientData.csv") %>% 
+  mutate(across(Discharge_Date, mdy)) %>%
+  filter(Discharge_Date >= as.Date("2004-01-01")) %>% 
+  filter(Discharge_Date <= as.Date("2024-12-31")) %>% 
+  arrange(Medical_Record_Number, Discharge_Date)
+
+
+# Diagnoses
+diagnoses <- read_csv("\\\\rc-fs\\neuro-peters\\Private\\ch134560\\PHIS files\\TSC_epilepsy_surgery_final\\DiagnosisPatientData.csv") %>% 
+  mutate(across(Discharge_Date, mdy)) %>%
+  filter(Discharge_Date >= as.Date("2004-01-01")) %>% 
+  filter(Discharge_Date <= as.Date("2024-12-31")) %>% 
+  arrange(Medical_Record_Number, Discharge_Date)
+
+
+# Procedures
+procedures <- read_csv("\\\\rc-fs\\neuro-peters\\Private\\ch134560\\PHIS files\\TSC_epilepsy_surgery_final\\ProcedurePatientData.csv") %>% 
+  mutate(across(Discharge_Date, mdy)) %>%
+  filter(Discharge_Date >= as.Date("2004-01-01")) %>% 
+  filter(Discharge_Date <= as.Date("2024-12-31")) %>% 
+  arrange(Medical_Record_Number, Discharge_Date)
+
+
+# CPT codes
+CPT_codes <- read_csv("\\\\rc-fs\\neuro-peters\\Private\\ch134560\\PHIS files\\TSC_epilepsy_surgery_final\\CPTPatientData.csv") %>% 
+  mutate(across(Discharge_Date, mdy)) %>% 
+  filter(is.na(Discharge_Date) | (Discharge_Date >= as.Date("2004-01-01"))) %>% 
+  filter(is.na(Discharge_Date) | (Discharge_Date <= as.Date("2024-12-31"))) %>% 
+  arrange(Medical_Record_Number, Discharge_Date)
+
+
+# Pharmacy
+pharmacy <- read_csv("\\\\rc-fs\\neuro-peters\\Private\\ch134560\\PHIS files\\TSC_epilepsy_surgery_final\\PharmacySummaryPatientData.csv") %>% 
+  mutate(across(Discharge_Date, mdy)) %>% 
+  filter(Discharge_Date >= as.Date("2004-01-01")) %>% 
+  filter(Discharge_Date <= as.Date("2024-12-31")) %>% 
+  arrange(Medical_Record_Number, Discharge_Date)
+```
+
+
+
+
+Confirm that all patients have tuberous sclerosis complex (they should because the only criterion to extract patients from the PHIS database was a diagnosis of tuberous sclerosis complex)
+```{r}
+# Codes for tuberous sclerosis complex
+ICD9_codes_TSC <- c("7595")
+
+ICD10_codes_TSC <- c("Q851")
+
+
+
+
+# Patients with tuberous sclerosis complex
+TSC_patients <- diagnoses %>% 
+  group_by(Medical_Record_Number) %>% 
+  mutate(TSC_diagnosis = case_when(
+    ( any(Dx_Code %in% ICD9_codes_TSC) | any(Dx_Code %in% ICD10_codes_TSC) ) ~ "yes",
+    TRUE ~ "no")
+         ) %>% 
+  ungroup() %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>% 
+  summarize(total_patients = n(),
+            patients_with_TSC = sum(TSC_diagnosis == "yes"),
+            proportion_patients_with_TSC = patients_with_TSC/total_patients)
+TSC_patients
+```
+
+
+
+
+Patients with tuberous sclerosis complex and epilepsy and refractory epilepsy
+```{r}
+# Codes for epilepsy
+ICD9_codes_epilepsy <- c("345", "3450", "34500", "34501", "3451", "34510", "34511", "3454", "34540", "34541", "3455", "34550", "34551", "3456", "34560", "34561", "3457", "34570", "34571", "3458", "34580", "34581", "3459", "34590", "34591")
+
+ICD10_codes_epilepsy <- c("G40", "G400", "G4000", "G40001", "G40009", "G4001", "G40011", "G40019", "G401", "G4010", "G40101", "G40109", "G4011", "G40111", "G40119", "G402", "G4020", "G40201", "G40209", "G4021", "G40211", "G40219", "G403", "G4030", "G40301", "G40309", "G4031", "G40311", "G40319", "G40A", "G40A0", "G40A01", "G40A09", "G40A1", "G40A11", "G40A19", "G40B", "G40B0", "G40B01", "G40B09", "G40B1", "G40B11", "G40B19", "G404", "G4040", "G40401", "G40409", "G4041", "G40411", "G40419", "G408", "G4080", "G40801", "G40802", "G40803", "G40804", "G4081", "G40811", "G40812", "G40813", "G40814", "G4082", "G40821", "G40822", "G40823", "G40824", "G4083", "G40833", "G40834", "G409", "G4090", "G40901", "G40909", "G4091", "G40911", "G40919")
+
+
+
+
+# Codes for refractory epilepsy
+ICD9_codes_refractory_epilepsy <- c("34501", "34511", "34541", "34551", "34561", "34571", "34581", "34591")
+
+ICD10_codes_refractory_epilepsy <- c("G4001", "G40011", "G40019", "G4011", "G40111", "G40119", "G4021", "G40211", "G40219", "G4031", "G40311", "G40319", "G40A1", "G40A11", "G40A19", "G40B1", "G40B11", "G40B19", "G4041", "G40411", "G40419", "G40803", "G40804", "G40813", "G40814", "G40823", "G40824", "G40833", "G40834", "G4091", "G40911", "G40919")
+
+
+
+
+# Patients with tuberous sclerosis complex and epilepsy and refractory epilepsy
+TSC_refractory_epilepsy_patients <- diagnoses %>% 
+  group_by(Medical_Record_Number) %>% 
+  mutate(epilepsy_diagnosis = case_when(
+    ( any(Dx_Code %in% ICD9_codes_epilepsy) | any(Dx_Code %in% ICD10_codes_epilepsy) ) ~ "yes",
+    TRUE ~ "no"),
+    refractory_epilepsy_diagnosis = case_when(
+    ( any(Dx_Code %in% ICD9_codes_refractory_epilepsy) | any(Dx_Code %in% ICD10_codes_refractory_epilepsy) ) ~ "yes",
+    TRUE ~ "no")    
+         ) %>% 
+  ungroup() %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>% 
+  summarize(total_patients = n(),
+            patients_with_epilepsy = sum(epilepsy_diagnosis == "yes"),
+            proportion_patients_with_epilepsy = patients_with_epilepsy/total_patients,
+            patients_with_refractory_epilepsy = sum(refractory_epilepsy_diagnosis == "yes"),
+            proportion_patients_with_refractory_epilepsy = patients_with_refractory_epilepsy/total_patients,
+            proportion_patients_with_refractory_epilepsy_among_patients_with_epilepsy = patients_with_refractory_epilepsy/patients_with_epilepsy)
+TSC_refractory_epilepsy_patients
+```
+
+
+
+
+Patients with tuberous sclerosis complex and refractory epilepsy with dates
+```{r}
+# Patients with tuberous sclerosis complex and refractory epilepsy with dates
+TSC_refractory_epilepsy_patients_dates <- diagnoses %>% 
+  group_by(Medical_Record_Number) %>% 
+  filter( any(Dx_Code %in% ICD9_codes_refractory_epilepsy) | any(Dx_Code %in% ICD10_codes_refractory_epilepsy) ) %>%     
+  ungroup() %>% 
+  arrange(Medical_Record_Number, Discharge_Date) %>% 
+  group_by(Medical_Record_Number) %>% 
+  mutate(first_encounter = dplyr::first(Discharge_Date),
+         first_TSC_diagnosis = dplyr::first(Discharge_Date[(Dx_Code %in% ICD9_codes_TSC) | (Dx_Code %in% ICD10_codes_TSC)]),
+         first_epilepsy_diagnosis = dplyr::first(Discharge_Date[(Dx_Code %in% ICD9_codes_epilepsy) | (Dx_Code %in% ICD10_codes_epilepsy)]),
+         first_refractory_epilepsy_diagnosis = dplyr::first(Discharge_Date[(Dx_Code %in% ICD9_codes_refractory_epilepsy) | (Dx_Code %in% ICD10_codes_refractory_epilepsy)]),   
+         last_encounter = dplyr::last(Discharge_Date)        
+         ) %>% 
+  ungroup() %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>% 
+  select(Medical_Record_Number, first_encounter, first_TSC_diagnosis, first_epilepsy_diagnosis, first_refractory_epilepsy_diagnosis, last_encounter)
+TSC_refractory_epilepsy_patients_dates
+```
+
+
+
+
+Create the database with number of antiseizure medications and create the date of first time a patient had a third oral chronic antiseizure medication
+```{r}
+# Identify ACTH (although ACTH can be used for endocrinologic conditions, in the context of tuberous sclerosis complex it is most likely used for treatment of infantile spasms)
+pharmacy_ACTH <- pharmacy %>% 
+  filter(grepl("corticotropin", Generic_Drug_Title, ignore.case=TRUE))
+pharmacy_ACTH
+
+
+
+
+# Identify the antiseizure medications
+pharmacy_only_ASMs <- pharmacy %>% 
+  filter( 
+    grepl("phenobarb", Generic_Drug_Title, ignore.case=TRUE) |
+    grepl("phenytoin", Generic_Drug_Title, ignore.case=TRUE) |
+    grepl("valpro", Generic_Drug_Title, ignore.case=TRUE) | 
+    grepl("carbamazepine", Generic_Drug_Title, ignore.case=TRUE) | 
+    grepl("oxcarbazepine", Generic_Drug_Title, ignore.case=TRUE) | 
+    grepl("rufinamide", Generic_Drug_Title, ignore.case=TRUE) | 
+    grepl("levetiracetam", Generic_Drug_Title, ignore.case=TRUE) | 
+    grepl("lamotrigine", Generic_Drug_Title, ignore.case=TRUE) | 
+    grepl("brivaracetam", Generic_Drug_Title, ignore.case=TRUE) | 
+    grepl("cenobamate", Generic_Drug_Title, ignore.case=TRUE) | 
+    grepl("clobazam", Generic_Drug_Title, ignore.case=TRUE) | 
+    grepl("eslicarbazepine", Generic_Drug_Title, ignore.case=TRUE) | 
+    grepl("ethosuximide", Generic_Drug_Title, ignore.case=TRUE) | 
+    grepl("lacosamide", Generic_Drug_Title, ignore.case=TRUE) | 
+    grepl("perampanel", Generic_Drug_Title, ignore.case=TRUE) | 
+    grepl("stiripentol", Generic_Drug_Title, ignore.case=TRUE) | 
+    grepl("topiramate", Generic_Drug_Title, ignore.case=TRUE) | 
+    grepl("vigabatrin", Generic_Drug_Title, ignore.case=TRUE) | 
+    grepl("zonisamide", Generic_Drug_Title, ignore.case=TRUE) | 
+    grepl("felbamate", Generic_Drug_Title, ignore.case=TRUE) | 
+    grepl("pregabalin", Generic_Drug_Title, ignore.case=TRUE) | 
+    grepl("tiagabine", Generic_Drug_Title, ignore.case=TRUE) | 
+    grepl("cannabidiol", Generic_Drug_Title, ignore.case=TRUE) | 
+    grepl("gabapentin", Generic_Drug_Title, ignore.case=TRUE) | 
+    grepl("fenfluramine", Generic_Drug_Title, ignore.case=TRUE) | 
+    grepl("methsuximide", Generic_Drug_Title, ignore.case=TRUE) | 
+    grepl("ezogabine", Generic_Drug_Title, ignore.case=TRUE)
+          ) %>% 
+  filter(Drug_Class_Title == "Central nervous system and autonomic agents") %>% 
+  filter(Therapeutic_Category_Title == "Anticonvulsant" | Therapeutic_Category_Title == "Sedative hypnotic") %>% 
+  filter(Route_Of_Administration_Title == "oral") %>% 
+  bind_rows(pharmacy_ACTH) %>% 
+  arrange(Medical_Record_Number, Discharge_Date, Generic_Drug_Title) %>% 
+  distinct(Medical_Record_Number, Discharge_Date, Generic_Drug_Title, .keep_all=TRUE) %>% 
+  select(Medical_Record_Number, Discharge_Date, Generic_Drug_Title)
+pharmacy_only_ASMs
+
+
+
+
+# Identify the first date at which a patient has received at least three different antiseizure medications
+first_3_ASMs_date <- select(TSC_refractory_epilepsy_patients_dates, Medical_Record_Number) %>% 
+  left_join(pharmacy_only_ASMs, by = "Medical_Record_Number") %>% 
+  arrange(Medical_Record_Number, Discharge_Date, Generic_Drug_Title) %>% 
+  group_by(Medical_Record_Number) %>% 
+  distinct(Generic_Drug_Title, .keep_all=TRUE) %>% 
+  mutate(date_first_3_ASMs = dplyr::nth(Discharge_Date, 3)) %>% 
+  ungroup() %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>% 
+  select(Medical_Record_Number, date_first_3_ASMs)
+first_3_ASMs_date
+
+
+
+
+# If the date of the third antiseizure medication is earlier than the date of first diagnosis of refractory epilepsy, substitute it
+TSC_refractory_epilepsy_patients_dates <- TSC_refractory_epilepsy_patients_dates %>% 
+  left_join(first_3_ASMs_date, by = "Medical_Record_Number") %>% 
+  mutate(first_refractory_epilepsy_diagnosis = case_when(
+    (date_first_3_ASMs < first_refractory_epilepsy_diagnosis) ~ date_first_3_ASMs,
+    TRUE ~ first_refractory_epilepsy_diagnosis)
+    ) %>% 
+  select(Medical_Record_Number, first_encounter, first_TSC_diagnosis, first_epilepsy_diagnosis, first_refractory_epilepsy_diagnosis, last_encounter)
+TSC_refractory_epilepsy_patients_dates
+```
+
+
+
+
+Create the database of patients with epilepsy surgery based on ICD codes
+```{r}
+# ICD codes for epilepsy surgery
+IC9_codes_lobectomy <- c("0153")
+IC9_codes_hemispherectomy <- c("0152")
+ICD9_codes_other_excision_or_disconnection_or_destruction <- c("0132", "0139", "015", "0159")
+ICD9_codes_LITT <- c("1761")
+ICD9_codes_intracranial_neurostimulator <- c("0120")
+
+IC10_codes_lobectomy <- c("00B70ZZ", "00B73ZZ", "00B74ZZ")
+IC10_codes_hemispherectomy <- c("00T70ZZ", "00T73ZZ", "00T74ZZ")
+ICD10_codes_other_excision_or_disconnection_or_destruction <- c("00500ZZ", "00503ZZ", "00504ZZ", "00570ZZ", "00573ZZ", "00574ZZ", "00800ZZ", "00803ZZ", "00804ZZ", "00870ZZ", "00873ZZ", "00874ZZ", "00B00ZZ", "00B03ZZ", "00B04ZZ", "00C00ZZ", "00C03ZZ", "00C04ZZ", "00C70ZZ", "00C73ZZ", "00C74ZZ", "00D00ZZ", "00D03ZZ", "00D04ZZ", "00D70ZZ", "00D73ZZ", "00D74ZZ")
+ICD10_codes_LITT <- c("00500Z3", "00503Z3", "00504Z3")
+ICD10_codes_intracranial_neurostimulator <- c("0NH00NZ")
+
+
+
+
+# Database of patients with epilepsy surgery based on ICD codes
+TSC_refractory_epilepsy_ICD_epilepsy_surgery <- select(TSC_refractory_epilepsy_patients_dates, Medical_Record_Number) %>% 
+  left_join(select(procedures, Medical_Record_Number, Discharge_Date, `Px_Code_(ICD)`, `Px_Title_(ICD)`), by="Medical_Record_Number") %>% 
+  filter(!is.na(Discharge_Date)) %>% 
+  filter( (`Px_Code_(ICD)` %in% IC9_codes_lobectomy) | (`Px_Code_(ICD)` %in% IC9_codes_hemispherectomy) | (`Px_Code_(ICD)` %in% ICD9_codes_other_excision_or_disconnection_or_destruction) | (`Px_Code_(ICD)` %in% ICD9_codes_LITT) | (`Px_Code_(ICD)` %in% ICD9_codes_intracranial_neurostimulator) | (`Px_Code_(ICD)` %in% IC10_codes_lobectomy) | (`Px_Code_(ICD)` %in% IC10_codes_hemispherectomy) | (`Px_Code_(ICD)` %in% ICD10_codes_other_excision_or_disconnection_or_destruction) | (`Px_Code_(ICD)` %in% ICD10_codes_LITT) | (`Px_Code_(ICD)` %in% ICD10_codes_intracranial_neurostimulator) ) %>% 
+  arrange(Medical_Record_Number, Discharge_Date) %>% 
+  group_by(Medical_Record_Number, Discharge_Date) %>% 
+  mutate(
+      ICD_lobectomy = case_when(
+        any( (`Px_Code_(ICD)` %in% IC9_codes_lobectomy) | (`Px_Code_(ICD)` %in% IC10_codes_lobectomy) ) ~ "yes",
+        TRUE ~ "no"),
+      ICD_hemispherectomy = case_when(
+        any( (`Px_Code_(ICD)` %in% IC9_codes_hemispherectomy) | (`Px_Code_(ICD)` %in% IC10_codes_hemispherectomy) ) ~ "yes",
+        TRUE ~ "no"),
+      ICD_other_excision_or_disconnection_or_destruction = case_when(
+        any( (`Px_Code_(ICD)` %in% ICD9_codes_other_excision_or_disconnection_or_destruction) | (`Px_Code_(ICD)` %in% ICD10_codes_other_excision_or_disconnection_or_destruction) ) ~ "yes",
+        TRUE ~ "no"),
+      ICD_LITT = case_when(
+        any( (`Px_Code_(ICD)` %in% ICD9_codes_LITT) | (`Px_Code_(ICD)` %in% ICD10_codes_LITT) ) ~ "yes",
+        TRUE ~ "no"), 
+      ICD_intracranial_neurostimulator = case_when(
+        any( (`Px_Code_(ICD)` %in% ICD9_codes_intracranial_neurostimulator) | (`Px_Code_(ICD)` %in% ICD10_codes_intracranial_neurostimulator) ) ~ "yes",
+        TRUE ~ "no")
+  ) %>% 
+  ungroup() %>% 
+  rename(epilepsy_surgery_date = Discharge_Date) %>% 
+  select(Medical_Record_Number, epilepsy_surgery_date, ICD_lobectomy, ICD_hemispherectomy, ICD_other_excision_or_disconnection_or_destruction, ICD_LITT, ICD_intracranial_neurostimulator) %>% 
+  distinct(Medical_Record_Number, epilepsy_surgery_date, .keep_all=TRUE)
+TSC_refractory_epilepsy_ICD_epilepsy_surgery
+```
+
+
+
+
+Create the database of patients with epilepsy surgery based on CPT codes
+```{r}
+# CPT codes for epilepsy surgery
+CPT_codes_lobectomy <- c("61537", "61538", "61539", "61540")
+CPT_codes_hemispherectomy <- c("61542", "61543")
+CPT_codes_other_excision_or_disconnection_or_destruction <- c("61534", "61536", "61541", "61566")
+CPT_codes_LITT <- c("61736", "61737")
+CPT_codes_intracranial_neurostimulator <- c("61889")
+
+
+
+
+# Database of patients with epilepsy surgery based on CPT codes
+TSC_refractory_epilepsy_CPT_epilepsy_surgery <- select(TSC_refractory_epilepsy_patients_dates, Medical_Record_Number) %>% 
+  left_join(select(CPT_codes, Medical_Record_Number, Discharge_Date, CPT_Code, CPT_Title), by="Medical_Record_Number") %>%  
+  filter(!is.na(Discharge_Date)) %>% 
+  filter( (CPT_Code %in% CPT_codes_lobectomy) | (CPT_Code %in% CPT_codes_hemispherectomy) | (CPT_Code %in% CPT_codes_other_excision_or_disconnection_or_destruction) | (CPT_Code %in% CPT_codes_LITT) | (CPT_Code %in% CPT_codes_intracranial_neurostimulator) ) %>% 
+  arrange(Medical_Record_Number, Discharge_Date) %>%   
+  group_by(Medical_Record_Number, Discharge_Date) %>% 
+  mutate(
+      CPT_lobectomy = case_when(
+        any( (CPT_Code %in% CPT_codes_lobectomy) ) ~ "yes",
+        TRUE ~ "no"),
+      CPT_hemispherectomy = case_when(
+        any( (CPT_Code %in% CPT_codes_hemispherectomy) ) ~ "yes",
+        TRUE ~ "no"),
+      CPT_other_excision_or_disconnection_or_destruction = case_when(
+        any( (CPT_Code %in% CPT_codes_other_excision_or_disconnection_or_destruction) ) ~ "yes",
+        TRUE ~ "no"),
+      CPT_LITT = case_when(
+        any( (CPT_Code %in% CPT_codes_LITT) ) ~ "yes",
+        TRUE ~ "no"), 
+      CPT_intracranial_neurostimulator = case_when(
+        any( (CPT_Code %in% CPT_codes_intracranial_neurostimulator) ) ~ "yes",
+        TRUE ~ "no")
+  ) %>% 
+  ungroup() %>% 
+  rename(epilepsy_surgery_date = Discharge_Date) %>%   
+  select(Medical_Record_Number, epilepsy_surgery_date, CPT_lobectomy, CPT_hemispherectomy, CPT_other_excision_or_disconnection_or_destruction, CPT_LITT, CPT_intracranial_neurostimulator) %>% 
+  distinct(Medical_Record_Number, epilepsy_surgery_date, .keep_all=TRUE)
+TSC_refractory_epilepsy_CPT_epilepsy_surgery
+```
+
+
+
+
+Create the combined database by merging the different databases
+```{r}
+# Create the TSC_refractory_epilepsy database
+TSC_refractory_epilepsy <- TSC_refractory_epilepsy_patients_dates %>% 
+  left_join(TSC_refractory_epilepsy_ICD_epilepsy_surgery, by = "Medical_Record_Number") %>% 
+  full_join(TSC_refractory_epilepsy_CPT_epilepsy_surgery, by = c("Medical_Record_Number", "epilepsy_surgery_date")) %>% 
+  distinct(Medical_Record_Number, epilepsy_surgery_date, .keep_all=TRUE) %>% 
+  arrange(Medical_Record_Number, epilepsy_surgery_date) %>%
+  group_by(Medical_Record_Number, epilepsy_surgery_date) %>% 
+  mutate(
+    lobectomy = case_when(
+      any( (ICD_lobectomy == "yes") | (CPT_lobectomy == "yes") ) ~ "yes",
+      TRUE ~ "no"),
+    hemispherectomy = case_when(
+      any( (ICD_hemispherectomy == "yes") | (CPT_hemispherectomy == "yes") ) ~ "yes",
+      TRUE ~ "no"),
+    other_excision_or_disconnection_or_destruction = case_when(
+      any( (ICD_other_excision_or_disconnection_or_destruction == "yes") | (CPT_other_excision_or_disconnection_or_destruction == "yes") ) ~ "yes",
+      TRUE ~ "no"),
+    LITT = case_when(
+      any( (ICD_LITT == "yes") | (CPT_LITT == "yes") ) ~ "yes",
+      TRUE ~ "no"),  
+    intracranial_neurostimulator = case_when(
+      any( (ICD_intracranial_neurostimulator == "yes") | (CPT_intracranial_neurostimulator == "yes") ) ~ "yes",
+      TRUE ~ "no")
+  ) %>% 
+  ungroup() %>% 
+  select(Medical_Record_Number, first_encounter, first_TSC_diagnosis, first_epilepsy_diagnosis, first_refractory_epilepsy_diagnosis, last_encounter, epilepsy_surgery_date, lobectomy, hemispherectomy, other_excision_or_disconnection_or_destruction, LITT, intracranial_neurostimulator) %>% 
+  mutate(epilepsy_surgery_yes_no = case_when(
+    is.na(epilepsy_surgery_date) ~ "no",
+    TRUE ~ "yes")
+  ) %>%
+  group_by(Medical_Record_Number) %>% 
+  mutate(epilepsy_surgery_number = case_when(
+    epilepsy_surgery_yes_no == "yes" ~ row_number(),
+    TRUE ~ 0),
+    epilepsy_surgery_total_number = max(epilepsy_surgery_number),
+    first_epilepsy_surgery_date = dplyr::first(epilepsy_surgery_date),
+    second_epilepsy_surgery_date = dplyr::nth(epilepsy_surgery_date, 2),    
+    third_epilepsy_surgery_date = dplyr::nth(epilepsy_surgery_date, 3),  
+    fourth_epilepsy_surgery_date = dplyr::nth(epilepsy_surgery_date, 4), 
+    fifth_epilepsy_surgery_date = dplyr::nth(epilepsy_surgery_date, 5),
+    sixth_epilepsy_surgery_date = dplyr::nth(epilepsy_surgery_date, 6),   
+    seventh_epilepsy_surgery_date = dplyr::nth(epilepsy_surgery_date, 7)
+    ) %>% 
+  ungroup() %>% 
+  select(Medical_Record_Number, epilepsy_surgery_yes_no, epilepsy_surgery_number, epilepsy_surgery_total_number, epilepsy_surgery_date, first_encounter, first_TSC_diagnosis, first_epilepsy_diagnosis, first_refractory_epilepsy_diagnosis, last_encounter, first_epilepsy_surgery_date, second_epilepsy_surgery_date, third_epilepsy_surgery_date, fourth_epilepsy_surgery_date, fifth_epilepsy_surgery_date, sixth_epilepsy_surgery_date, seventh_epilepsy_surgery_date, lobectomy, hemispherectomy, other_excision_or_disconnection_or_destruction, LITT, intracranial_neurostimulator) %>% 
+  left_join(select(patient_abstract, Discharge_Date, Hospital_Name, Medical_Record_Number, DOB, Gender_Title, Race_White, Race_Black, Race_Asian, Race_Pacific_Islander, Race_American_Indian, Race_Other, Race_Title_Version_1, Census_Region, Urban_Flag, PMCA_Category_Title, Ethnicity_Title) %>%
+              mutate(across(DOB, mdy)),
+            by = c("Medical_Record_Number", "first_refractory_epilepsy_diagnosis" = "Discharge_Date")) %>% 
+  distinct(Medical_Record_Number, epilepsy_surgery_date, .keep_all=TRUE) %>% 
+  mutate(race = case_when(
+    ( (Race_White == "Y") | (Race_Title_Version_1 == "White") ) ~ "White",
+    ( (Race_Black == "Y") | (Race_Title_Version_1 == "Black") ) ~ "Black",    
+    ( (Race_Asian == "Y") | (Race_Title_Version_1 == "Asian") ) ~ "Asian", 
+    ( (Race_American_Indian == "Y") | (Race_Title_Version_1 == "American_Indian") ) ~ "American_Indian", 
+    TRUE ~ "Other/unknown")
+    ) %>% 
+  select(-matches("Race_")) %>% 
+  group_by(Medical_Record_Number) %>% 
+  mutate(
+    DOB = case_when(
+      is.na(DOB) ~ dplyr::first(DOB[!is.na(DOB)]),
+      TRUE ~ DOB),
+    Gender_Title = case_when(
+      is.na(Gender_Title) ~ dplyr::first(Gender_Title[!is.na(Gender_Title)]),
+      TRUE ~ Gender_Title),    
+    first_encounter = case_when(
+      is.na(first_encounter) ~ dplyr::first(first_encounter[!is.na(first_encounter)]),
+      TRUE ~ first_encounter),
+    first_TSC_diagnosis = case_when(
+      is.na(first_TSC_diagnosis) ~ dplyr::first(first_TSC_diagnosis[!is.na(first_TSC_diagnosis)]),
+      TRUE ~ first_TSC_diagnosis),
+    first_epilepsy_diagnosis = case_when(
+      is.na(first_epilepsy_diagnosis) ~ dplyr::first(first_epilepsy_diagnosis[!is.na(first_epilepsy_diagnosis)]),
+      TRUE ~ first_epilepsy_diagnosis),
+    first_refractory_epilepsy_diagnosis = case_when(
+      is.na(first_refractory_epilepsy_diagnosis) ~ dplyr::first(first_refractory_epilepsy_diagnosis[!is.na(first_refractory_epilepsy_diagnosis)]),
+      TRUE ~ first_refractory_epilepsy_diagnosis),    
+    last_encounter = case_when(
+      is.na(last_encounter) ~ dplyr::first(last_encounter[!is.na(last_encounter)]),
+      TRUE ~ last_encounter)
+    ) %>% 
+  ungroup() %>% 
+  mutate(person_years_follow_up = as.numeric(last_encounter - first_encounter)/ 365.24219,
+         person_years_epilepsy_to_surgery = case_when(
+           (epilepsy_surgery_yes_no == "yes") ~ as.numeric(first_epilepsy_surgery_date - first_epilepsy_diagnosis)/ 365.24219,
+           TRUE ~ as.numeric(last_encounter - first_epilepsy_diagnosis)/ 365.24219),
+         person_years_refractory_epilepsy_to_surgery = case_when(
+           (epilepsy_surgery_yes_no == "yes") ~ as.numeric(first_epilepsy_surgery_date - first_refractory_epilepsy_diagnosis)/ 365.24219,
+           TRUE ~ as.numeric(last_encounter - first_refractory_epilepsy_diagnosis)/ 365.24219),
+         person_years_surgery_to_last_encounter = case_when(
+           (epilepsy_surgery_yes_no == "yes") ~ as.numeric(last_encounter - first_epilepsy_surgery_date)/ 365.24219,
+           TRUE ~ NA)         
+         ) %>% 
+  mutate(follow_up_1_y_before_1_y_after_surgery = case_when(
+    ( (epilepsy_surgery_yes_no == "yes") & (person_years_refractory_epilepsy_to_surgery >= 1) & (person_years_surgery_to_last_encounter >= 1) ) ~ "yes",
+    ( (epilepsy_surgery_yes_no == "no") & (person_years_refractory_epilepsy_to_surgery >= 2) ) ~ "yes",
+    TRUE ~ "no")
+  )
+TSC_refractory_epilepsy
+```
+ 
+ 
+  
+
+Create the table for healthcare utilization 
+```{r}
+#Inflation data
+# Inflation calculations (https://apps.bea.gov/iTable/?reqid=19&step=2&isuri=1&categories=survey&_gl=1*1piml3m*_ga*NDg1MDgzODA2LjE3MDg0OTgxMjg.*_ga_J4698JNNFT*MTcwODQ5ODQ5Mi4xLjEuMTcwODQ5ODUzNi4xNi4wLjA.#eyJhcHBpZCI6MTksInN0ZXBzIjpbMSwyLDMsM10sImRhdGEiOltbImNhdGVnb3JpZXMiLCJTdXJ2ZXkiXSxbIk5JUEFfVGFibGVfTGlzdCIsIjQiXSxbIkZpcnN0X1llYXIiLCIyMDA0Il0sWyJMYXN0X1llYXIiLCIyMDI0Il0sWyJTY2FsZSIsIjAiXSxbIlNlcmllcyIsIlEiXV19 Last accessed 3/12/2025)
+# https://meps.ahrq.gov/about_meps/Price_Index.shtml
+inflation_2004_Q1 <- 0.78191
+inflation_2004_Q2 <- 0.78825
+inflation_2004_Q3 <- 0.79323
+inflation_2004_Q4 <- 0.79936
+inflation_2005_Q1 <- 0.80550
+inflation_2005_Q2 <- 0.81137
+inflation_2005_Q3 <- 0.81905
+inflation_2005_Q4 <- 0.82557
+inflation_2006_Q1 <- 0.83135
+inflation_2006_Q2 <- 0.83871	
+inflation_2006_Q3 <- 0.84486	
+inflation_2006_Q4 <- 0.84806
+inflation_2007_Q1 <- 0.85655
+inflation_2007_Q2 <- 0.86201	
+inflation_2007_Q3 <- 0.86568	
+inflation_2007_Q4 <- 0.86982	
+inflation_2008_Q1 <- 0.87359
+inflation_2008_Q2 <- 0.87678	
+inflation_2008_Q3 <- 0.88361	
+inflation_2008_Q4 <- 0.88511
+inflation_2009_Q1 <- 0.88536
+inflation_2009_Q2 <- 0.88418	
+inflation_2009_Q3 <- 0.88474	
+inflation_2009_Q4 <- 0.88798	
+inflation_2010_Q1 <- 0.89018	
+inflation_2010_Q2 <- 0.89431	
+inflation_2010_Q3 <- 0.89755			
+inflation_2010_Q4 <- 0.90270			
+inflation_2011_Q1 <- 0.90710
+inflation_2011_Q2 <- 0.91363	
+inflation_2011_Q3 <- 0.91840	
+inflation_2011_Q4 <- 0.91951	
+inflation_2012_Q1 <- 0.92495	
+inflation_2012_Q2 <- 0.92881	
+inflation_2012_Q3 <- 0.93459
+inflation_2012_Q4 <- 0.93869	
+inflation_2013_Q1 <- 0.94204
+inflation_2013_Q2 <- 0.94474
+inflation_2013_Q3 <- 0.94989
+inflation_2013_Q4 <- 0.95477		
+inflation_2014_Q1 <- 0.95840
+inflation_2014_Q2 <- 0.96343	
+inflation_2014_Q3 <- 0.96762
+inflation_2014_Q4 <- 0.96800		
+inflation_2015_Q1 <- 0.96742
+inflation_2015_Q2 <- 0.97302	
+inflation_2015_Q3 <- 0.97536
+inflation_2015_Q4 <- 0.97527
+inflation_2016_Q1 <- 0.97468	
+inflation_2016_Q2 <- 0.98108	
+inflation_2016_Q3 <- 0.98372
+inflation_2016_Q4 <- 0.98884
+inflation_2017_Q1 <- 0.99389
+inflation_2017_Q2 <- 0.99656		
+inflation_2017_Q3 <- 1.00174
+inflation_2017_Q4 <- 1.00780	
+inflation_2018_Q1 <- 1.01428	
+inflation_2018_Q2 <- 1.02140		
+inflation_2018_Q3 <- 1.02586
+inflation_2018_Q4 <- 1.03005		
+inflation_2019_Q1 <- 1.03332	
+inflation_2019_Q2 <- 1.03855		
+inflation_2019_Q3 <- 10.4196
+inflation_2019_Q4 <- 1.04543	
+inflation_2020_Q1 <- 1.05001
+inflation_2020_Q2 <- 1.04651		
+inflation_2020_Q3 <- 1.05574
+inflation_2020_Q4 <- 1.06293
+inflation_2021_Q1 <- 1.07645	
+inflation_2021_Q2 <- 1.09278		
+inflation_2021_Q3 <- 1.10931
+inflation_2021_Q4 <- 1.12836
+inflation_2022_Q1 <- 1.15160		
+inflation_2022_Q2 <- 1.17760		
+inflation_2022_Q3 <- 1.19073
+inflation_2022_Q4 <- 1.20173
+inflation_2023_Q1 <- 1.21247		
+inflation_2023_Q2 <- 1.21809		
+inflation_2023_Q3 <- 1.22785
+inflation_2023_Q4 <- 1.23247
+inflation_2024_Q1 <- 1.24168		
+inflation_2024_Q2 <- 1.24942		
+inflation_2024_Q3 <- 1.25543
+inflation_2024_Q4 <- 1.26285
+
+
+
+
+# Create the TSC_refractory_epilepsy_healthcare_utilization database
+TSC_refractory_epilepsy_healthcare_utilization <- TSC_refractory_epilepsy %>% 
+  left_join(select(patient_abstract, Medical_Record_Number, Discharge_Date, Patient_Type_Title, Length_Of_Stay, Pre_Operative_LOS, Post_Operative_LOS, Disposition_Title, Disposition_Title_Version_1, ED_Charge_Flag, ICU_Flag, Mechanical_Vent_Flag, Operating_Room_Charge_Flag, Surgical_Complication_Flag, Version_1_Flag, Priority_Of_Admission_Title, Priority_Of_Admission_Title_V1, Admit_Dx, Admit_Dx_Title, Principal_Dx, Principal_Dx_Title, Primary_Source_Of_Payment_Title, Principal_Payer_Title_V1, Median_Household_Income, Predicted_Median_Household_Income, Discharge_Mortality_Flag, Abstract_Based_Charges, Adj_Abstract_Based_Charges, Estimated_Cost, Adj_Est_Cost), by = "Medical_Record_Number") %>% 
+      mutate(disposition = case_when(
+        ( (Disposition_Title == "Discharge to Home or Self Care (Routine Discharge)") | (Disposition_Title == "Discharged to home or self care with a planned acute care hospital inpatient readmission") | (Disposition_Title_Version_1 == "Discharged to home or other self care") ) ~ "home",
+        ( (Disposition_Title == "Discharged/Transferred to Home under Care of Organized Home Health Service Organization in Anticipation of Covered Skilled Care") | (Disposition_Title_Version_1 == "Discharged to home health services") ) ~ "home health services",
+        ( (Disposition_Title == "Discharged/Transferred to a Designated Cancer Center or Children's Hospital") | (Disposition_Title == "Discharged/transferred to a designated cancer center or children's hospital with a planned acute care hospital inpatient readmission") | (Disposition_Title == "Discharged/Transferred to a Federal Health Care Facility") | (Disposition_Title == "Discharged/Transferred to a Nursing Facility Certified under Medicaid but not Certified Under Medicare") | (Disposition_Title == "Discharged/Transferred to a Psychiatric Hospital or Psychiatric Distinct Part Unit of a Hospital") | (Disposition_Title == "Discharged/Transferred to a Short-term General Hospital for Inpatient Care") | (Disposition_Title == "Discharged/Transferred to a Skilled Nursing Facility (SNF) with Medicare Certification in  Anticipation of Skilled Care") | (Disposition_Title == "Discharged/Transferred to an Inpatient Rehabilitation Facility (IRF) Including Rehabilitation Distinct Part Units of a Hospital") | (Disposition_Title == "Discharged/Transferred to an Intermediate Care Facility (ICF)") | (Disposition_Title == "Discharged/transferred to another Type of Health Care Institution not Defined Elsewhere in this Code List (See Code 05)") | (Disposition_Title == "Discharged/Transferred to Long Term Care Hospitals (LTCH)") | (Disposition_Title_Version_1 == "Transferred to short-term care facility") | (Disposition_Title_Version_1 == "Transferred to intermediate care facility") | (Disposition_Title_Version_1 == "Transferred to other facility") ) ~ "transferred",
+        ( (Disposition_Title == "Left Against Medical Advice or Discontinued Care") | (Disposition_Title_Version_1 == "Left against medical advice (AMA)") ) ~ "left against medical advice",   
+        ( (Disposition_Title == "Expired") | (Disposition_Title_Version_1 == "Expired") ) ~ "expired", 
+        TRUE ~ "other/unknown")
+      ) %>% 
+      select(-matches("Disposition_")) %>% 
+      mutate(admission_type = case_when(
+        ( (Priority_Of_Admission_Title == "Emergency") | (Priority_Of_Admission_Title_V1 == "Emergency") ) ~ "emergency",
+        ( (Priority_Of_Admission_Title == "Urgent") | (Priority_Of_Admission_Title_V1 == "Urgent") ) ~ "urgent",   
+        TRUE ~ "other/unknown")
+               ) %>% 
+      select(-matches("Priority_")) %>%   
+      mutate(payer = case_when(
+        ( (Primary_Source_Of_Payment_Title == "Commercial HMO") | (Primary_Source_Of_Payment_Title == "Commercial Other") | (Primary_Source_Of_Payment_Title == "Commercial PPO") | (Principal_Payer_Title_V1 == "Blue Cross") | (Principal_Payer_Title_V1 == "Other insurance company") ) ~ "private",
+        ( (Primary_Source_Of_Payment_Title == "CHIP") | (Primary_Source_Of_Payment_Title == "In-State Medicaid (managed care)") | (Primary_Source_Of_Payment_Title == "In-State Medicaid (other)") | (Primary_Source_Of_Payment_Title == "Medicare") | (Primary_Source_Of_Payment_Title == "Other Government") | (Primary_Source_Of_Payment_Title == "Out-of-State Medicaid (all)") | (Primary_Source_Of_Payment_Title == "TRICARE") | (Principal_Payer_Title_V1 == "Medicaid") | (Principal_Payer_Title_V1 == "Other government source") | (Principal_Payer_Title_V1 == "Title V") ) ~ "public",   
+        TRUE ~ "other/unknown")
+      ) %>% 
+      select(-matches("Primary_")) %>% 
+      select(-matches("Principal_Payer")) %>% 
+  group_by(Medical_Record_Number) %>% 
+  mutate(Predicted_Median_Household_Income = case_when(
+    (Predicted_Median_Household_Income >= 0) ~ Predicted_Median_Household_Income,
+    TRUE ~ dplyr::first(Predicted_Median_Household_Income[Predicted_Median_Household_Income >= 0]))
+           ) %>% 
+  ungroup() %>%   
+  mutate(year_quarter = quarter(Discharge_Date, with_year=TRUE)) %>%
+  mutate(
+    Abstract_Based_Charges = case_when(
+      year_quarter == 2004.1 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2004_Q1), 
+      year_quarter == 2004.2 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2004_Q2),  
+      year_quarter == 2004.3 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2004_Q3), 
+      year_quarter == 2004.4 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2004_Q4), 
+      year_quarter == 2005.1 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2005_Q1), 
+      year_quarter == 2005.2 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2005_Q2),  
+      year_quarter == 2005.3 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2005_Q3), 
+      year_quarter == 2005.4 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2005_Q4),  
+      year_quarter == 2006.1 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2006_Q1), 
+      year_quarter == 2006.2 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2006_Q2),  
+      year_quarter == 2006.3 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2006_Q3), 
+      year_quarter == 2006.4 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2006_Q4),        
+      year_quarter == 2007.1 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2007_Q1), 
+      year_quarter == 2007.2 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2007_Q2),  
+      year_quarter == 2007.3 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2007_Q3), 
+      year_quarter == 2007.4 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2007_Q4),         
+      year_quarter == 2008.1 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2008_Q1), 
+      year_quarter == 2008.2 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2008_Q2),  
+      year_quarter == 2008.3 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2008_Q3), 
+      year_quarter == 2008.4 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2008_Q4),       
+      year_quarter == 2009.1 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2009_Q1), 
+      year_quarter == 2009.2 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2009_Q2),  
+      year_quarter == 2009.3 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2009_Q3), 
+      year_quarter == 2009.4 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2009_Q4),        
+      year_quarter == 2010.1 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2010_Q1), 
+      year_quarter == 2010.2 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2010_Q2),  
+      year_quarter == 2010.3 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2010_Q3), 
+      year_quarter == 2010.4 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2010_Q4),       
+      year_quarter == 2011.1 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2011_Q1), 
+      year_quarter == 2011.2 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2011_Q2),  
+      year_quarter == 2011.3 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2011_Q3), 
+      year_quarter == 2011.4 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2011_Q4),             
+      year_quarter == 2012.1 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2012_Q1), 
+      year_quarter == 2012.2 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2012_Q2),  
+      year_quarter == 2012.3 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2012_Q3), 
+      year_quarter == 2012.4 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2012_Q4),        
+      year_quarter == 2013.1 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2013_Q1), 
+      year_quarter == 2013.2 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2013_Q2),  
+      year_quarter == 2013.3 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2013_Q3), 
+      year_quarter == 2013.4 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2013_Q4),        
+      year_quarter == 2014.1 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2014_Q1), 
+      year_quarter == 2014.2 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2014_Q2),  
+      year_quarter == 2014.3 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2014_Q3), 
+      year_quarter == 2014.4 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2014_Q4),       
+      year_quarter == 2015.1 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2015_Q1), 
+      year_quarter == 2015.2 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2015_Q2),  
+      year_quarter == 2015.3 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2015_Q3), 
+      year_quarter == 2015.4 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2015_Q4),  
+      year_quarter == 2016.1 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2016_Q1), 
+      year_quarter == 2016.2 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2016_Q2),  
+      year_quarter == 2016.3 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2016_Q3), 
+      year_quarter == 2016.4 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2016_Q4),  
+      year_quarter == 2017.1 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2017_Q1), 
+      year_quarter == 2017.2 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2017_Q2),  
+      year_quarter == 2017.3 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2017_Q3), 
+      year_quarter == 2017.4 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2017_Q4),       
+      year_quarter == 2018.1 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2018_Q1), 
+      year_quarter == 2018.2 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2018_Q2),  
+      year_quarter == 2018.3 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2018_Q3), 
+      year_quarter == 2018.4 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2018_Q4),       
+      year_quarter == 2019.1 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2019_Q1), 
+      year_quarter == 2019.2 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2019_Q2),  
+      year_quarter == 2019.3 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2019_Q3), 
+      year_quarter == 2019.4 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2019_Q4),                
+      year_quarter == 2020.1 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2020_Q1), 
+      year_quarter == 2020.2 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2020_Q2),  
+      year_quarter == 2020.3 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2020_Q3), 
+      year_quarter == 2020.4 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2020_Q4),                   
+      year_quarter == 2021.1 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2021_Q1), 
+      year_quarter == 2021.2 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2021_Q2),  
+      year_quarter == 2021.3 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2021_Q3), 
+      year_quarter == 2021.4 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2021_Q4),         
+      year_quarter == 2022.1 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2022_Q1), 
+      year_quarter == 2022.2 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2022_Q2),  
+      year_quarter == 2022.3 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2022_Q3), 
+      year_quarter == 2022.4 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2022_Q4), 
+      year_quarter == 2023.1 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2023_Q1), 
+      year_quarter == 2023.2 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2023_Q2),  
+      year_quarter == 2023.3 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2023_Q3), 
+      year_quarter == 2023.4 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2023_Q4),       
+      year_quarter == 2024.1 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2024_Q1), 
+      year_quarter == 2024.2 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2024_Q2),  
+      year_quarter == 2024.3 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2024_Q3), 
+      year_quarter == 2024.4 ~ Abstract_Based_Charges*(inflation_2024_Q4/inflation_2024_Q4)
+    ),
+    Adj_Abstract_Based_Charges = case_when(
+      year_quarter == 2004.1 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2004_Q1), 
+      year_quarter == 2004.2 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2004_Q2),  
+      year_quarter == 2004.3 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2004_Q3), 
+      year_quarter == 2004.4 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2004_Q4), 
+      year_quarter == 2005.1 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2005_Q1), 
+      year_quarter == 2005.2 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2005_Q2),  
+      year_quarter == 2005.3 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2005_Q3), 
+      year_quarter == 2005.4 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2005_Q4),  
+      year_quarter == 2006.1 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2006_Q1), 
+      year_quarter == 2006.2 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2006_Q2),  
+      year_quarter == 2006.3 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2006_Q3), 
+      year_quarter == 2006.4 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2006_Q4),        
+      year_quarter == 2007.1 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2007_Q1), 
+      year_quarter == 2007.2 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2007_Q2),  
+      year_quarter == 2007.3 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2007_Q3), 
+      year_quarter == 2007.4 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2007_Q4),         
+      year_quarter == 2008.1 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2008_Q1), 
+      year_quarter == 2008.2 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2008_Q2),  
+      year_quarter == 2008.3 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2008_Q3), 
+      year_quarter == 2008.4 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2008_Q4),       
+      year_quarter == 2009.1 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2009_Q1), 
+      year_quarter == 2009.2 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2009_Q2),  
+      year_quarter == 2009.3 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2009_Q3), 
+      year_quarter == 2009.4 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2009_Q4),        
+      year_quarter == 2010.1 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2010_Q1), 
+      year_quarter == 2010.2 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2010_Q2),  
+      year_quarter == 2010.3 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2010_Q3), 
+      year_quarter == 2010.4 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2010_Q4),       
+      year_quarter == 2011.1 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2011_Q1), 
+      year_quarter == 2011.2 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2011_Q2),  
+      year_quarter == 2011.3 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2011_Q3), 
+      year_quarter == 2011.4 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2011_Q4),             
+      year_quarter == 2012.1 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2012_Q1), 
+      year_quarter == 2012.2 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2012_Q2),  
+      year_quarter == 2012.3 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2012_Q3), 
+      year_quarter == 2012.4 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2012_Q4),        
+      year_quarter == 2013.1 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2013_Q1), 
+      year_quarter == 2013.2 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2013_Q2),  
+      year_quarter == 2013.3 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2013_Q3), 
+      year_quarter == 2013.4 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2013_Q4),        
+      year_quarter == 2014.1 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2014_Q1), 
+      year_quarter == 2014.2 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2014_Q2),  
+      year_quarter == 2014.3 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2014_Q3), 
+      year_quarter == 2014.4 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2014_Q4),       
+      year_quarter == 2015.1 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2015_Q1), 
+      year_quarter == 2015.2 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2015_Q2),  
+      year_quarter == 2015.3 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2015_Q3), 
+      year_quarter == 2015.4 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2015_Q4),  
+      year_quarter == 2016.1 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2016_Q1), 
+      year_quarter == 2016.2 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2016_Q2),  
+      year_quarter == 2016.3 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2016_Q3), 
+      year_quarter == 2016.4 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2016_Q4),  
+      year_quarter == 2017.1 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2017_Q1), 
+      year_quarter == 2017.2 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2017_Q2),  
+      year_quarter == 2017.3 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2017_Q3), 
+      year_quarter == 2017.4 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2017_Q4),       
+      year_quarter == 2018.1 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2018_Q1), 
+      year_quarter == 2018.2 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2018_Q2),  
+      year_quarter == 2018.3 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2018_Q3), 
+      year_quarter == 2018.4 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2018_Q4),       
+      year_quarter == 2019.1 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2019_Q1), 
+      year_quarter == 2019.2 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2019_Q2),  
+      year_quarter == 2019.3 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2019_Q3), 
+      year_quarter == 2019.4 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2019_Q4),                
+      year_quarter == 2020.1 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2020_Q1), 
+      year_quarter == 2020.2 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2020_Q2),  
+      year_quarter == 2020.3 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2020_Q3), 
+      year_quarter == 2020.4 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2020_Q4),                   
+      year_quarter == 2021.1 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2021_Q1), 
+      year_quarter == 2021.2 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2021_Q2),  
+      year_quarter == 2021.3 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2021_Q3), 
+      year_quarter == 2021.4 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2021_Q4),         
+      year_quarter == 2022.1 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2022_Q1), 
+      year_quarter == 2022.2 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2022_Q2),  
+      year_quarter == 2022.3 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2022_Q3), 
+      year_quarter == 2022.4 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2022_Q4), 
+      year_quarter == 2023.1 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2023_Q1), 
+      year_quarter == 2023.2 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2023_Q2),  
+      year_quarter == 2023.3 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2023_Q3), 
+      year_quarter == 2023.4 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2023_Q4),       
+      year_quarter == 2024.1 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2024_Q1), 
+      year_quarter == 2024.2 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2024_Q2),  
+      year_quarter == 2024.3 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2024_Q3), 
+      year_quarter == 2024.4 ~ Adj_Abstract_Based_Charges*(inflation_2024_Q4/inflation_2024_Q4)
+    ),    
+    Estimated_Cost = case_when(
+      year_quarter == 2004.1 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2004_Q1), 
+      year_quarter == 2004.2 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2004_Q2),  
+      year_quarter == 2004.3 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2004_Q3), 
+      year_quarter == 2004.4 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2004_Q4), 
+      year_quarter == 2005.1 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2005_Q1), 
+      year_quarter == 2005.2 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2005_Q2),  
+      year_quarter == 2005.3 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2005_Q3), 
+      year_quarter == 2005.4 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2005_Q4),  
+      year_quarter == 2006.1 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2006_Q1), 
+      year_quarter == 2006.2 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2006_Q2),  
+      year_quarter == 2006.3 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2006_Q3), 
+      year_quarter == 2006.4 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2006_Q4),        
+      year_quarter == 2007.1 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2007_Q1), 
+      year_quarter == 2007.2 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2007_Q2),  
+      year_quarter == 2007.3 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2007_Q3), 
+      year_quarter == 2007.4 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2007_Q4),         
+      year_quarter == 2008.1 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2008_Q1), 
+      year_quarter == 2008.2 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2008_Q2),  
+      year_quarter == 2008.3 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2008_Q3), 
+      year_quarter == 2008.4 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2008_Q4),       
+      year_quarter == 2009.1 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2009_Q1), 
+      year_quarter == 2009.2 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2009_Q2),  
+      year_quarter == 2009.3 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2009_Q3), 
+      year_quarter == 2009.4 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2009_Q4),        
+      year_quarter == 2010.1 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2010_Q1), 
+      year_quarter == 2010.2 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2010_Q2),  
+      year_quarter == 2010.3 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2010_Q3), 
+      year_quarter == 2010.4 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2010_Q4),       
+      year_quarter == 2011.1 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2011_Q1), 
+      year_quarter == 2011.2 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2011_Q2),  
+      year_quarter == 2011.3 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2011_Q3), 
+      year_quarter == 2011.4 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2011_Q4),             
+      year_quarter == 2012.1 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2012_Q1), 
+      year_quarter == 2012.2 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2012_Q2),  
+      year_quarter == 2012.3 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2012_Q3), 
+      year_quarter == 2012.4 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2012_Q4),        
+      year_quarter == 2013.1 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2013_Q1), 
+      year_quarter == 2013.2 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2013_Q2),  
+      year_quarter == 2013.3 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2013_Q3), 
+      year_quarter == 2013.4 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2013_Q4),        
+      year_quarter == 2014.1 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2014_Q1), 
+      year_quarter == 2014.2 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2014_Q2),  
+      year_quarter == 2014.3 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2014_Q3), 
+      year_quarter == 2014.4 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2014_Q4),       
+      year_quarter == 2015.1 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2015_Q1), 
+      year_quarter == 2015.2 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2015_Q2),  
+      year_quarter == 2015.3 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2015_Q3), 
+      year_quarter == 2015.4 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2015_Q4),  
+      year_quarter == 2016.1 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2016_Q1), 
+      year_quarter == 2016.2 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2016_Q2),  
+      year_quarter == 2016.3 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2016_Q3), 
+      year_quarter == 2016.4 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2016_Q4),  
+      year_quarter == 2017.1 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2017_Q1), 
+      year_quarter == 2017.2 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2017_Q2),  
+      year_quarter == 2017.3 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2017_Q3), 
+      year_quarter == 2017.4 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2017_Q4),       
+      year_quarter == 2018.1 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2018_Q1), 
+      year_quarter == 2018.2 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2018_Q2),  
+      year_quarter == 2018.3 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2018_Q3), 
+      year_quarter == 2018.4 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2018_Q4),       
+      year_quarter == 2019.1 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2019_Q1), 
+      year_quarter == 2019.2 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2019_Q2),  
+      year_quarter == 2019.3 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2019_Q3), 
+      year_quarter == 2019.4 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2019_Q4),                
+      year_quarter == 2020.1 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2020_Q1), 
+      year_quarter == 2020.2 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2020_Q2),  
+      year_quarter == 2020.3 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2020_Q3), 
+      year_quarter == 2020.4 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2020_Q4),                   
+      year_quarter == 2021.1 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2021_Q1), 
+      year_quarter == 2021.2 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2021_Q2),  
+      year_quarter == 2021.3 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2021_Q3), 
+      year_quarter == 2021.4 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2021_Q4),         
+      year_quarter == 2022.1 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2022_Q1), 
+      year_quarter == 2022.2 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2022_Q2),  
+      year_quarter == 2022.3 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2022_Q3), 
+      year_quarter == 2022.4 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2022_Q4), 
+      year_quarter == 2023.1 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2023_Q1), 
+      year_quarter == 2023.2 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2023_Q2),  
+      year_quarter == 2023.3 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2023_Q3), 
+      year_quarter == 2023.4 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2023_Q4),       
+      year_quarter == 2024.1 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2024_Q1), 
+      year_quarter == 2024.2 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2024_Q2),  
+      year_quarter == 2024.3 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2024_Q3), 
+      year_quarter == 2024.4 ~ Estimated_Cost*(inflation_2024_Q4/inflation_2024_Q4)
+    ),          
+    Adj_Est_Cost = case_when(
+      year_quarter == 2004.1 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2004_Q1), 
+      year_quarter == 2004.2 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2004_Q2),  
+      year_quarter == 2004.3 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2004_Q3), 
+      year_quarter == 2004.4 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2004_Q4), 
+      year_quarter == 2005.1 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2005_Q1), 
+      year_quarter == 2005.2 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2005_Q2),  
+      year_quarter == 2005.3 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2005_Q3), 
+      year_quarter == 2005.4 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2005_Q4),  
+      year_quarter == 2006.1 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2006_Q1), 
+      year_quarter == 2006.2 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2006_Q2),  
+      year_quarter == 2006.3 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2006_Q3), 
+      year_quarter == 2006.4 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2006_Q4),        
+      year_quarter == 2007.1 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2007_Q1), 
+      year_quarter == 2007.2 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2007_Q2),  
+      year_quarter == 2007.3 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2007_Q3), 
+      year_quarter == 2007.4 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2007_Q4),         
+      year_quarter == 2008.1 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2008_Q1), 
+      year_quarter == 2008.2 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2008_Q2),  
+      year_quarter == 2008.3 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2008_Q3), 
+      year_quarter == 2008.4 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2008_Q4),       
+      year_quarter == 2009.1 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2009_Q1), 
+      year_quarter == 2009.2 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2009_Q2),  
+      year_quarter == 2009.3 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2009_Q3), 
+      year_quarter == 2009.4 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2009_Q4),        
+      year_quarter == 2010.1 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2010_Q1), 
+      year_quarter == 2010.2 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2010_Q2),  
+      year_quarter == 2010.3 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2010_Q3), 
+      year_quarter == 2010.4 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2010_Q4),       
+      year_quarter == 2011.1 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2011_Q1), 
+      year_quarter == 2011.2 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2011_Q2),  
+      year_quarter == 2011.3 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2011_Q3), 
+      year_quarter == 2011.4 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2011_Q4),             
+      year_quarter == 2012.1 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2012_Q1), 
+      year_quarter == 2012.2 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2012_Q2),  
+      year_quarter == 2012.3 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2012_Q3), 
+      year_quarter == 2012.4 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2012_Q4),        
+      year_quarter == 2013.1 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2013_Q1), 
+      year_quarter == 2013.2 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2013_Q2),  
+      year_quarter == 2013.3 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2013_Q3), 
+      year_quarter == 2013.4 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2013_Q4),        
+      year_quarter == 2014.1 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2014_Q1), 
+      year_quarter == 2014.2 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2014_Q2),  
+      year_quarter == 2014.3 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2014_Q3), 
+      year_quarter == 2014.4 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2014_Q4),       
+      year_quarter == 2015.1 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2015_Q1), 
+      year_quarter == 2015.2 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2015_Q2),  
+      year_quarter == 2015.3 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2015_Q3), 
+      year_quarter == 2015.4 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2015_Q4),  
+      year_quarter == 2016.1 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2016_Q1), 
+      year_quarter == 2016.2 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2016_Q2),  
+      year_quarter == 2016.3 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2016_Q3), 
+      year_quarter == 2016.4 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2016_Q4),  
+      year_quarter == 2017.1 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2017_Q1), 
+      year_quarter == 2017.2 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2017_Q2),  
+      year_quarter == 2017.3 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2017_Q3), 
+      year_quarter == 2017.4 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2017_Q4),       
+      year_quarter == 2018.1 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2018_Q1), 
+      year_quarter == 2018.2 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2018_Q2),  
+      year_quarter == 2018.3 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2018_Q3), 
+      year_quarter == 2018.4 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2018_Q4),       
+      year_quarter == 2019.1 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2019_Q1), 
+      year_quarter == 2019.2 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2019_Q2),  
+      year_quarter == 2019.3 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2019_Q3), 
+      year_quarter == 2019.4 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2019_Q4),                
+      year_quarter == 2020.1 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2020_Q1), 
+      year_quarter == 2020.2 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2020_Q2),  
+      year_quarter == 2020.3 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2020_Q3), 
+      year_quarter == 2020.4 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2020_Q4),                   
+      year_quarter == 2021.1 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2021_Q1), 
+      year_quarter == 2021.2 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2021_Q2),  
+      year_quarter == 2021.3 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2021_Q3), 
+      year_quarter == 2021.4 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2021_Q4),         
+      year_quarter == 2022.1 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2022_Q1), 
+      year_quarter == 2022.2 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2022_Q2),  
+      year_quarter == 2022.3 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2022_Q3), 
+      year_quarter == 2022.4 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2022_Q4), 
+      year_quarter == 2023.1 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2023_Q1), 
+      year_quarter == 2023.2 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2023_Q2),  
+      year_quarter == 2023.3 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2023_Q3), 
+      year_quarter == 2023.4 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2023_Q4),       
+      year_quarter == 2024.1 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2024_Q1), 
+      year_quarter == 2024.2 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2024_Q2),  
+      year_quarter == 2024.3 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2024_Q3), 
+      year_quarter == 2024.4 ~ Adj_Est_Cost*(inflation_2024_Q4/inflation_2024_Q4)
+    )
+  )
+     
+TSC_refractory_epilepsy_healthcare_utilization
+```
+
+
+
+
+Create the variable person_years_refractory_epilepsy_to_surgery_per_year
+```{r}
+# Create the TSC_refractory_epilepsy_person_years database
+TSC_refractory_epilepsy_person_years <- TSC_refractory_epilepsy %>% 
+  left_join(select(patient_abstract, Medical_Record_Number, Discharge_Date), by = "Medical_Record_Number") %>% 
+  arrange(Medical_Record_Number, Discharge_Date) %>% 
+  mutate(year_follow_up = year(Discharge_Date)) %>% 
+  group_by(Medical_Record_Number) %>% 
+  tidyr::complete(year_follow_up = min(year_follow_up) : max(year_follow_up)) %>% 
+  mutate(
+    epilepsy_surgery_yes_no = case_when(
+      is.na(epilepsy_surgery_yes_no) ~ dplyr::first(epilepsy_surgery_yes_no[!is.na(epilepsy_surgery_yes_no)]),
+      TRUE ~ epilepsy_surgery_yes_no), 
+    epilepsy_surgery_total_number = case_when(
+      is.na(epilepsy_surgery_total_number) ~ dplyr::first(epilepsy_surgery_total_number[!is.na(epilepsy_surgery_total_number)]),
+      TRUE ~ epilepsy_surgery_total_number), 
+    first_encounter = case_when(
+      is.na(first_encounter) ~ dplyr::first(first_encounter[!is.na(first_encounter)]),
+      TRUE ~ first_encounter), 
+    first_TSC_diagnosis = case_when(
+      is.na(first_TSC_diagnosis) ~ dplyr::first(first_TSC_diagnosis[!is.na(first_TSC_diagnosis)]),
+      TRUE ~ first_TSC_diagnosis), 
+    first_epilepsy_diagnosis = case_when(
+      is.na(first_epilepsy_diagnosis) ~ dplyr::first(first_epilepsy_diagnosis[!is.na(first_epilepsy_diagnosis)]),
+      TRUE ~ first_epilepsy_diagnosis),     
+    first_refractory_epilepsy_diagnosis = case_when(
+      is.na(first_refractory_epilepsy_diagnosis) ~ dplyr::first(first_refractory_epilepsy_diagnosis[!is.na(first_refractory_epilepsy_diagnosis)]),
+      TRUE ~ first_refractory_epilepsy_diagnosis),   
+    last_encounter = case_when(
+      is.na(last_encounter) ~ dplyr::first(last_encounter[!is.na(last_encounter)]),
+      TRUE ~ last_encounter),      
+    first_epilepsy_surgery_date = case_when(
+      is.na(first_epilepsy_surgery_date) ~ dplyr::first(first_epilepsy_surgery_date[!is.na(first_epilepsy_surgery_date)]),
+      TRUE ~ first_epilepsy_surgery_date),     
+    second_epilepsy_surgery_date = case_when(
+      is.na(second_epilepsy_surgery_date) ~ dplyr::first(second_epilepsy_surgery_date[!is.na(second_epilepsy_surgery_date)]),
+      TRUE ~ second_epilepsy_surgery_date),      
+    third_epilepsy_surgery_date = case_when(
+      is.na(third_epilepsy_surgery_date) ~ dplyr::first(third_epilepsy_surgery_date[!is.na(third_epilepsy_surgery_date)]),
+      TRUE ~ third_epilepsy_surgery_date),      
+    fourth_epilepsy_surgery_date = case_when(
+      is.na(fourth_epilepsy_surgery_date) ~ dplyr::first(fourth_epilepsy_surgery_date[!is.na(fourth_epilepsy_surgery_date)]),
+      TRUE ~ fourth_epilepsy_surgery_date), 
+    fifth_epilepsy_surgery_date = case_when(
+      is.na(fifth_epilepsy_surgery_date) ~ dplyr::first(fifth_epilepsy_surgery_date[!is.na(fifth_epilepsy_surgery_date)]),
+      TRUE ~ fifth_epilepsy_surgery_date),     
+    sixth_epilepsy_surgery_date = case_when(
+      is.na(sixth_epilepsy_surgery_date) ~ dplyr::first(sixth_epilepsy_surgery_date[!is.na(sixth_epilepsy_surgery_date)]),
+      TRUE ~ sixth_epilepsy_surgery_date),    
+    seventh_epilepsy_surgery_date = case_when(
+      is.na(seventh_epilepsy_surgery_date) ~ dplyr::first(seventh_epilepsy_surgery_date[!is.na(seventh_epilepsy_surgery_date)]),
+      TRUE ~ seventh_epilepsy_surgery_date),     
+    DOB = case_when(
+      is.na(DOB) ~ dplyr::first(DOB[!is.na(DOB)]),
+      TRUE ~ DOB),       
+  ) %>% 
+  ungroup() %>%   
+  group_by(Medical_Record_Number) %>% 
+  mutate(first_epilepsy_surgery_per_year = case_when(
+    ( year(dplyr::first(epilepsy_surgery_date)) == year_follow_up ) ~ 1,
+    TRUE ~ 0)
+           ) %>% 
+  ungroup() %>% 
+  group_by(Medical_Record_Number, year_follow_up) %>% 
+    mutate(person_years_refractory_epilepsy_to_surgery_per_year = case_when(
+      (epilepsy_surgery_yes_no == "yes") ~ max(0, as.numeric( ( min( first_epilepsy_surgery_date, (ymd(year_follow_up + 1, truncated=2L) - 1), na.rm=TRUE ) - max( first_refractory_epilepsy_diagnosis, ymd(year_follow_up, truncated=2L) , na.rm=TRUE )) ) / 365.24219),
+      TRUE ~ max(0, as.numeric( ( min( last_encounter, (ymd(year_follow_up + 1, truncated=2L) - 1), na.rm=TRUE ) - max( first_refractory_epilepsy_diagnosis, ymd(year_follow_up, truncated=2L) , na.rm=TRUE )) ) / 365.24219)
+    )
+    ) %>% 
+  ungroup() %>% 
+  select(-Discharge_Date) %>% 
+  distinct(Medical_Record_Number, epilepsy_surgery_date, year_follow_up, .keep_all=TRUE) %>% 
+  arrange(Medical_Record_Number, epilepsy_surgery_date, year_follow_up)
+TSC_refractory_epilepsy_person_years
+```
+
+
+
+
+
+
+
+
+## 3. Demographic and clinical features
+
+
+
+
+Demographics
+```{r}
+# Total patients with TSC
+TSC_patients
+
+
+
+
+# Total patients with epilepsy and refractory epilepsy
+TSC_refractory_epilepsy_patients
+
+
+
+
+# Total patients
+total_patients <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number) %>% 
+  nrow()
+total_patients
+
+
+total_patients_with_epilepsy_surgery <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>% 
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  nrow()
+total_patients_with_epilepsy_surgery
+total_patients_with_epilepsy_surgery/total_patients
+
+
+total_patients_without_epilepsy_surgery <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>% 
+  filter(epilepsy_surgery_yes_no == "no") %>% 
+  nrow()
+total_patients_without_epilepsy_surgery
+total_patients_without_epilepsy_surgery/total_patients
+
+
+
+
+# Total epilepsy surgeries
+total_epilepsy_surgeries <- TSC_refractory_epilepsy %>% 
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  nrow()
+total_epilepsy_surgeries
+
+  
+
+
+# Person-years total follow-up
+total_person_years_follow_up <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>%  
+  filter(person_years_follow_up >= 0) %>% 
+  summarize(
+    median_person_years_follow_up = median(person_years_follow_up),
+    p25_person_years_follow_up = quantile(person_years_follow_up, 0.25),
+    p75_person_years_follow_up = quantile(person_years_follow_up, 0.75),
+    mean_person_years_follow_up = mean(person_years_follow_up),
+    SD_person_years_follow_up = sd(person_years_follow_up)
+  )
+total_person_years_follow_up
+ 
+
+total_person_years_follow_up_with_epilepsy_surgery <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>%   
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  filter(person_years_follow_up >= 0) %>% 
+  summarize(
+    median_person_years_follow_up = median(person_years_follow_up),
+    p25_person_years_follow_up = quantile(person_years_follow_up, 0.25),
+    p75_person_years_follow_up = quantile(person_years_follow_up, 0.75),
+    mean_person_years_follow_up = mean(person_years_follow_up),
+    SD_person_years_follow_up = sd(person_years_follow_up)
+  )
+total_person_years_follow_up_with_epilepsy_surgery
+
+
+total_person_years_follow_up_without_epilepsy_surgery <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>%   
+  filter(epilepsy_surgery_yes_no == "no") %>% 
+  filter(person_years_follow_up >= 0) %>% 
+  summarize(
+    median_person_years_follow_up = median(person_years_follow_up),
+    p25_person_years_follow_up = quantile(person_years_follow_up, 0.25),
+    p75_person_years_follow_up = quantile(person_years_follow_up, 0.75),
+    mean_person_years_follow_up = mean(person_years_follow_up),
+    SD_person_years_follow_up = sd(person_years_follow_up)
+  )
+total_person_years_follow_up_without_epilepsy_surgery
+
+
+
+
+# Person-years from diagnosis of epilepsy to first epilepsy surgery (or last follow-up for patients who did not have epilepsy surgery)
+total_person_years_epilepsy_to_surgery <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>%  
+  filter(person_years_epilepsy_to_surgery >= 0) %>% 
+  summarize(
+    median_person_years_epilepsy_to_surgery = median(person_years_epilepsy_to_surgery),
+    p25_person_years_epilepsy_to_surgery = quantile(person_years_epilepsy_to_surgery, 0.25),
+    p75_person_years_epilepsy_to_surgery = quantile(person_years_epilepsy_to_surgery, 0.75),
+    mean_person_years_epilepsy_to_surgery = mean(person_years_epilepsy_to_surgery),
+    SD_person_years_epilepsy_to_surgery = sd(person_years_epilepsy_to_surgery)
+  )
+total_person_years_epilepsy_to_surgery
+ 
+
+total_person_years_epilepsy_to_surgery_with_epilepsy_surgery <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>%   
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  filter(person_years_epilepsy_to_surgery >= 0) %>% 
+  summarize(
+    median_person_years_epilepsy_to_surgery = median(person_years_epilepsy_to_surgery),
+    p25_person_years_epilepsy_to_surgery = quantile(person_years_epilepsy_to_surgery, 0.25),
+    p75_person_years_epilepsy_to_surgery = quantile(person_years_epilepsy_to_surgery, 0.75),
+    mean_person_years_epilepsy_to_surgery = mean(person_years_epilepsy_to_surgery),
+    SD_person_years_epilepsy_to_surgery = sd(person_years_epilepsy_to_surgery)
+  )
+total_person_years_epilepsy_to_surgery_with_epilepsy_surgery
+
+
+total_person_years_epilepsy_to_surgery_without_epilepsy_surgery <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>%   
+  filter(epilepsy_surgery_yes_no == "no") %>% 
+  filter(person_years_epilepsy_to_surgery >= 0) %>% 
+  summarize(
+    median_person_years_epilepsy_to_surgery = median(person_years_epilepsy_to_surgery),
+    p25_person_years_epilepsy_to_surgery = quantile(person_years_epilepsy_to_surgery, 0.25),
+    p75_person_years_epilepsy_to_surgery = quantile(person_years_epilepsy_to_surgery, 0.75),
+    mean_person_years_epilepsy_to_surgery = mean(person_years_epilepsy_to_surgery),
+    SD_person_years_epilepsy_to_surgery = sd(person_years_epilepsy_to_surgery)
+  )
+total_person_years_epilepsy_to_surgery_without_epilepsy_surgery
+
+
+
+
+# Person-years from diagnosis of refractory epilepsy to first epilepsy surgery (or last follow-up for patients who did not have epilepsy surgery)
+total_person_years_refractory_epilepsy_to_surgery <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>%   
+  filter(person_years_refractory_epilepsy_to_surgery >= 0) %>% 
+  summarize(
+    median_person_years_refractory_epilepsy_to_surgery = median(person_years_refractory_epilepsy_to_surgery),
+    p25_person_years_refractory_epilepsy_to_surgery = quantile(person_years_refractory_epilepsy_to_surgery, 0.25),
+    p75_person_years_refractory_epilepsy_to_surgery = quantile(person_years_refractory_epilepsy_to_surgery, 0.75),
+    mean_person_years_refractory_epilepsy_to_surgery = mean(person_years_refractory_epilepsy_to_surgery),
+    SD_person_years_refractory_epilepsy_to_surgery = sd(person_years_refractory_epilepsy_to_surgery)
+  )
+total_person_years_refractory_epilepsy_to_surgery
+ 
+
+total_person_years_refractory_epilepsy_to_surgery_with_epilepsy_surgery <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>%   
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  filter(person_years_refractory_epilepsy_to_surgery >= 0) %>% 
+  summarize(
+    median_person_years_refractory_epilepsy_to_surgery = median(person_years_refractory_epilepsy_to_surgery),
+    p25_person_years_refractory_epilepsy_to_surgery = quantile(person_years_refractory_epilepsy_to_surgery, 0.25),
+    p75_person_years_refractory_epilepsy_to_surgery = quantile(person_years_refractory_epilepsy_to_surgery, 0.75),
+    mean_person_years_refractory_epilepsy_to_surgery = mean(person_years_refractory_epilepsy_to_surgery),
+    SD_person_years_refractory_epilepsy_to_surgery = sd(person_years_refractory_epilepsy_to_surgery)
+  )
+total_person_years_refractory_epilepsy_to_surgery_with_epilepsy_surgery
+
+
+total_person_years_refractory_epilepsy_to_surgery_without_epilepsy_surgery <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>%   
+  filter(epilepsy_surgery_yes_no == "no") %>% 
+  filter(person_years_refractory_epilepsy_to_surgery >= 0) %>% 
+  summarize(
+    median_person_years_refractory_epilepsy_to_surgery = median(person_years_refractory_epilepsy_to_surgery),
+    p25_person_years_refractory_epilepsy_to_surgery = quantile(person_years_refractory_epilepsy_to_surgery, 0.25),
+    p75_person_years_refractory_epilepsy_to_surgery = quantile(person_years_refractory_epilepsy_to_surgery, 0.75),
+    mean_person_years_refractory_epilepsy_to_surgery = mean(person_years_refractory_epilepsy_to_surgery),
+    SD_person_years_refractory_epilepsy_to_surgery = sd(person_years_refractory_epilepsy_to_surgery)
+  )
+total_person_years_refractory_epilepsy_to_surgery_without_epilepsy_surgery
+
+
+
+
+# Patients by type of follow-up
+follow_up_groups <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all = TRUE) %>% 
+  reframe(
+    follow_up_groups = CrossTable(follow_up_1_y_before_1_y_after_surgery)
+    )
+
+
+follow_up_groups_with_epilepsy_surgery <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all = TRUE) %>% 
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  reframe(
+    follow_up_groups = CrossTable(follow_up_1_y_before_1_y_after_surgery)
+    )
+
+
+follow_up_groups_without_epilepsy_surgery <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all = TRUE) %>% 
+  filter(epilepsy_surgery_yes_no == "no") %>% 
+  reframe(
+    follow_up_groups = CrossTable(follow_up_1_y_before_1_y_after_surgery)
+    )
+
+
+
+
+# Age at first diagnosis of tuberous sclerosis complex
+age_at_first_diagnosis_TSC <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>%   
+  mutate(
+    age_first_TSC = as.numeric(first_TSC_diagnosis - DOB)/ 365.24219
+  ) %>% 
+  summarize(
+    median_age = median(age_first_TSC),
+    p25_age = quantile(age_first_TSC, 0.25),
+    p75_age = quantile(age_first_TSC, 0.75),
+    mean_age = mean(age_first_TSC),
+    SD_age = sd(age_first_TSC)
+  )
+age_at_first_diagnosis_TSC 
+ 
+ 
+age_at_first_diagnosis_TSC_with_epilepsy_surgery <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>%   
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  mutate(
+    age_first_TSC = as.numeric(first_TSC_diagnosis - DOB)/ 365.24219
+  ) %>% 
+  summarize(
+    median_age = median(age_first_TSC),
+    p25_age = quantile(age_first_TSC, 0.25),
+    p75_age = quantile(age_first_TSC, 0.75),
+    mean_age = mean(age_first_TSC),
+    SD_age = sd(age_first_TSC)
+  )
+age_at_first_diagnosis_TSC_with_epilepsy_surgery
+
+
+age_at_first_diagnosis_TSC_without_epilepsy_surgery <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>%   
+  filter(epilepsy_surgery_yes_no == "no") %>% 
+  mutate(
+    age_first_TSC = as.numeric(first_TSC_diagnosis - DOB)/ 365.24219
+  ) %>% 
+  summarize(
+    median_age = median(age_first_TSC),
+    p25_age = quantile(age_first_TSC, 0.25),
+    p75_age = quantile(age_first_TSC, 0.75),
+    mean_age = mean(age_first_TSC),
+    SD_age = sd(age_first_TSC)
+  )
+age_at_first_diagnosis_TSC_without_epilepsy_surgery
+
+
+
+
+# Age at first diagnosis of epilepsy
+age_at_first_diagnosis_epilepsy <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>%   
+  mutate(
+    age_first_epilepsy = as.numeric(first_epilepsy_diagnosis - DOB)/ 365.24219
+  ) %>% 
+  summarize(
+    median_age = median(age_first_epilepsy),
+    p25_age = quantile(age_first_epilepsy, 0.25),
+    p75_age = quantile(age_first_epilepsy, 0.75),
+    mean_age = mean(age_first_epilepsy),
+    SD_age = sd(age_first_epilepsy)
+  )
+age_at_first_diagnosis_epilepsy
+ 
+
+age_at_first_diagnosis_epilepsy_with_epilepsy_surgery <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>%  
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  mutate(
+    age_first_epilepsy = as.numeric(first_epilepsy_diagnosis - DOB)/ 365.24219
+  ) %>% 
+  summarize(
+    median_age = median(age_first_epilepsy),
+    p25_age = quantile(age_first_epilepsy, 0.25),
+    p75_age = quantile(age_first_epilepsy, 0.75),
+    mean_age = mean(age_first_epilepsy),
+    SD_age = sd(age_first_epilepsy)
+  )
+age_at_first_diagnosis_epilepsy_with_epilepsy_surgery
+
+
+age_at_first_diagnosis_epilepsy_without_epilepsy_surgery <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>%  
+  filter(epilepsy_surgery_yes_no == "no") %>% 
+  mutate(
+    age_first_epilepsy = as.numeric(first_epilepsy_diagnosis - DOB)/ 365.24219
+  ) %>% 
+  summarize(
+    median_age = median(age_first_epilepsy),
+    p25_age = quantile(age_first_epilepsy, 0.25),
+    p75_age = quantile(age_first_epilepsy, 0.75),
+    mean_age = mean(age_first_epilepsy),
+    SD_age = sd(age_first_epilepsy)
+  )
+age_at_first_diagnosis_epilepsy_without_epilepsy_surgery
+
+
+
+
+# Age at first diagnosis of refractory epilepsy
+age_at_first_diagnosis_refractory_epilepsy <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>%   
+  mutate(
+    age_first_refractory_epilepsy = as.numeric(first_refractory_epilepsy_diagnosis - DOB)/ 365.24219
+  ) %>% 
+  summarize(
+    median_age = median(age_first_refractory_epilepsy),
+    p25_age = quantile(age_first_refractory_epilepsy, 0.25),
+    p75_age = quantile(age_first_refractory_epilepsy, 0.75),
+    mean_age = mean(age_first_refractory_epilepsy),
+    SD_age = sd(age_first_refractory_epilepsy)
+  )
+age_at_first_diagnosis_refractory_epilepsy
+ 
+
+age_at_first_diagnosis_refractory_epilepsy_with_epilepsy_surgery <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>%  
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  mutate(
+    age_first_refractory_epilepsy = as.numeric(first_refractory_epilepsy_diagnosis - DOB)/ 365.24219
+  ) %>% 
+  summarize(
+    median_age = median(age_first_refractory_epilepsy),
+    p25_age = quantile(age_first_refractory_epilepsy, 0.25),
+    p75_age = quantile(age_first_refractory_epilepsy, 0.75),
+    mean_age = mean(age_first_refractory_epilepsy),
+    SD_age = sd(age_first_refractory_epilepsy)
+  )
+age_at_first_diagnosis_refractory_epilepsy_with_epilepsy_surgery
+
+
+age_at_first_diagnosis_refractory_epilepsy_without_epilepsy_surgery <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>%  
+  filter(epilepsy_surgery_yes_no == "no") %>% 
+  mutate(
+    age_first_refractory_epilepsy = as.numeric(first_refractory_epilepsy_diagnosis - DOB)/ 365.24219
+  ) %>% 
+  summarize(
+    median_age = median(age_first_refractory_epilepsy),
+    p25_age = quantile(age_first_refractory_epilepsy, 0.25),
+    p75_age = quantile(age_first_refractory_epilepsy, 0.75),
+    mean_age = mean(age_first_refractory_epilepsy),
+    SD_age = sd(age_first_refractory_epilepsy)
+  )
+age_at_first_diagnosis_refractory_epilepsy_without_epilepsy_surgery
+
+
+age_at_first_diagnosis_refractory_epilepsy_with_long_follow_up <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>%  
+  filter(follow_up_1_y_before_1_y_after_surgery == "yes") %>% 
+  mutate(
+    age_first_refractory_epilepsy = as.numeric(first_refractory_epilepsy_diagnosis - DOB)/ 365.24219
+  ) %>% 
+  summarize(
+    median_age = median(age_first_refractory_epilepsy),
+    p25_age = quantile(age_first_refractory_epilepsy, 0.25),
+    p75_age = quantile(age_first_refractory_epilepsy, 0.75),
+    mean_age = mean(age_first_refractory_epilepsy),
+    SD_age = sd(age_first_refractory_epilepsy)
+  )
+age_at_first_diagnosis_refractory_epilepsy_with_long_follow_up
+
+
+age_at_first_diagnosis_refractory_epilepsy_without_long_follow_up <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>%  
+  filter(follow_up_1_y_before_1_y_after_surgery == "no") %>% 
+  mutate(
+    age_first_refractory_epilepsy = as.numeric(first_refractory_epilepsy_diagnosis - DOB)/ 365.24219
+  ) %>% 
+  summarize(
+    median_age = median(age_first_refractory_epilepsy),
+    p25_age = quantile(age_first_refractory_epilepsy, 0.25),
+    p75_age = quantile(age_first_refractory_epilepsy, 0.75),
+    mean_age = mean(age_first_refractory_epilepsy),
+    SD_age = sd(age_first_refractory_epilepsy)
+  )
+age_at_first_diagnosis_refractory_epilepsy_without_long_follow_up
+
+
+
+
+# Age at first epilepsy surgery  
+age_at_first_epilepsy_surgery <- TSC_refractory_epilepsy %>% 
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>% 
+  mutate(
+    age_first_epilepsy_surgery = as.numeric(first_epilepsy_surgery_date - DOB)/ 365.24219
+  ) %>% 
+  summarize(
+    median_age = median(age_first_epilepsy_surgery),
+    p25_age = quantile(age_first_epilepsy_surgery, 0.25),
+    p75_age = quantile(age_first_epilepsy_surgery, 0.75),
+    mean_age = mean(age_first_epilepsy_surgery),
+    SD_age = sd(age_first_epilepsy_surgery)
+  )
+age_at_first_epilepsy_surgery 
+
+
+
+
+# Sex
+sex <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>% 
+  reframe(
+    sex = CrossTable(Gender_Title)
+  )
+
+
+sex_with_epilepsy_surgery <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>% 
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  reframe(
+    sex = CrossTable(Gender_Title)
+  )
+
+
+sex_without_epilepsy_surgery <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>% 
+  filter(epilepsy_surgery_yes_no == "no") %>% 
+  reframe(
+    sex = CrossTable(Gender_Title)
+  )
+
+
+
+
+# Race
+race <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>% 
+  reframe(
+    race = CrossTable(race)
+  )
+
+
+race_with_epilepsy_surgery <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>% 
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  reframe(
+    race = CrossTable(race)
+  )
+
+
+race_without_epilepsy_surgery <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>% 
+  filter(epilepsy_surgery_yes_no == "no") %>% 
+  reframe(
+    race = CrossTable(race)
+  )
+
+
+
+
+# Ethnicity
+ethnicity <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>% 
+  reframe(
+    ethnicity = CrossTable(Ethnicity_Title)
+  )
+
+
+ethnicity_with_epilepsy_surgery <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>% 
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  reframe(
+    ethnicity = CrossTable(Ethnicity_Title)
+  )
+
+
+ethnicity_without_epilepsy_surgery <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>% 
+  filter(epilepsy_surgery_yes_no == "no") %>% 
+  reframe(
+    ethnicity = CrossTable(Ethnicity_Title)
+  )
+
+
+
+
+# Region
+region <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>% 
+  reframe(
+    region = CrossTable(Census_Region)
+  )
+
+
+region_with_epilepsy_surgery <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>% 
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  reframe(
+    region = CrossTable(Census_Region)
+  )
+
+
+region_without_epilepsy_surgery <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>% 
+  filter(epilepsy_surgery_yes_no == "no") %>% 
+  reframe(
+    region = CrossTable(Census_Region)
+  )
+
+
+
+
+# Urban residence
+urban <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>% 
+  reframe(
+    urban = CrossTable(Urban_Flag)
+  )
+
+
+urban_with_epilepsy_surgery <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>% 
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  reframe(
+    urban = CrossTable(Urban_Flag)
+  )
+
+
+urban_without_epilepsy_surgery <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>% 
+  filter(epilepsy_surgery_yes_no == "no") %>% 
+  reframe(
+    urban = CrossTable(Urban_Flag)
+  )
+
+
+
+
+# Insurance at the time of refractory epilepsy diagnosis
+insurance_at_first_refractory_epilepsy <- TSC_refractory_epilepsy_healthcare_utilization %>%
+  group_by(Medical_Record_Number) %>% 
+  filter(Discharge_Date == first_refractory_epilepsy_diagnosis) %>% 
+  ungroup() %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>% 
+  reframe(
+    insurance = CrossTable(payer)
+  )  
+  
+
+insurance_at_first_refractory_epilepsy_with_epilepsy_surgery <- TSC_refractory_epilepsy_healthcare_utilization %>%
+  group_by(Medical_Record_Number) %>% 
+  filter(Discharge_Date == first_refractory_epilepsy_diagnosis) %>% 
+  ungroup() %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>% 
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  reframe(
+    insurance = CrossTable(payer)
+  )    
+  
+
+insurance_at_first_refractory_epilepsy_without_epilepsy_surgery <- TSC_refractory_epilepsy_healthcare_utilization %>%
+  group_by(Medical_Record_Number) %>% 
+  filter(Discharge_Date == first_refractory_epilepsy_diagnosis) %>% 
+  ungroup() %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>% 
+  filter(epilepsy_surgery_yes_no == "no") %>% 
+  reframe(
+    insurance = CrossTable(payer)
+  ) 
+
+
+
+
+# Insurance at the time of first epilepsy surgery
+insurance_at_time_of_first_epilepsy_surgery <- TSC_refractory_epilepsy_healthcare_utilization %>%
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  group_by(Medical_Record_Number) %>% 
+  filter(Discharge_Date == first_epilepsy_surgery_date) %>% 
+  ungroup() %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>% 
+  reframe(
+    insurance = CrossTable(payer)
+  )  
+
+
+
+
+# Median household income at the time of refractory epilepsy diagnosis
+median_household_income_at_first_diagnosis_refractory_epilepsy <- TSC_refractory_epilepsy_healthcare_utilization %>% 
+  group_by(Medical_Record_Number) %>% 
+  filter(Discharge_Date == first_refractory_epilepsy_diagnosis) %>% 
+  ungroup() %>%   
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>% 
+  mutate(income = case_when(
+    (Predicted_Median_Household_Income > 0) ~ Predicted_Median_Household_Income,
+    TRUE ~ NA)
+         ) %>% 
+  summarize(
+    median_income = median(income, na.rm=TRUE),
+    p25_income = quantile(income, 0.25, na.rm=TRUE),
+    p75_income = quantile(income, 0.75, na.rm=TRUE),
+    mean_income = mean(income, na.rm=TRUE),
+    SD_income = sd(income, na.rm=TRUE)
+  )
+median_household_income_at_first_diagnosis_refractory_epilepsy
+ 
+
+median_household_income_at_first_diagnosis_refractory_epilepsy_with_epilepsy_surgery <- TSC_refractory_epilepsy_healthcare_utilization %>% 
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  group_by(Medical_Record_Number) %>% 
+  filter(Discharge_Date == first_refractory_epilepsy_diagnosis) %>% 
+  ungroup() %>%   
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>% 
+  mutate(income = case_when(
+    (Predicted_Median_Household_Income > 0) ~ Predicted_Median_Household_Income,
+    TRUE ~ NA)
+         ) %>% 
+  summarize(
+    median_income = median(income, na.rm=TRUE),
+    p25_income = quantile(income, 0.25, na.rm=TRUE),
+    p75_income = quantile(income, 0.75, na.rm=TRUE),
+    mean_income = mean(income, na.rm=TRUE),
+    SD_income = sd(income, na.rm=TRUE)
+  )
+median_household_income_at_first_diagnosis_refractory_epilepsy_with_epilepsy_surgery
+
+
+median_household_income_at_first_diagnosis_refractory_epilepsy_without_epilepsy_surgery <- TSC_refractory_epilepsy_healthcare_utilization %>% 
+  filter(epilepsy_surgery_yes_no == "no") %>% 
+  group_by(Medical_Record_Number) %>% 
+  filter(Discharge_Date == first_refractory_epilepsy_diagnosis) %>% 
+  ungroup() %>%   
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>% 
+  mutate(income = case_when(
+    (Predicted_Median_Household_Income > 0) ~ Predicted_Median_Household_Income,
+    TRUE ~ NA)
+         ) %>% 
+  summarize(
+    median_income = median(income, na.rm=TRUE),
+    p25_income = quantile(income, 0.25, na.rm=TRUE),
+    p75_income = quantile(income, 0.75, na.rm=TRUE),
+    mean_income = mean(income, na.rm=TRUE),
+    SD_income = sd(income, na.rm=TRUE)
+  )
+median_household_income_at_first_diagnosis_refractory_epilepsy_without_epilepsy_surgery
+
+
+
+
+# Median household income at the time of surgery
+median_household_income_at_time_of_epilepsy_surgery <- TSC_refractory_epilepsy_healthcare_utilization %>% 
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  group_by(Medical_Record_Number) %>% 
+  filter(Discharge_Date == first_epilepsy_surgery_date) %>% 
+  ungroup() %>%   
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>% 
+  mutate(income = case_when(
+    (Predicted_Median_Household_Income > 0) ~ Predicted_Median_Household_Income,
+    TRUE ~ NA)
+         ) %>% 
+  summarize(
+    median_income = median(income, na.rm=TRUE),
+    p25_income = quantile(income, 0.25, na.rm=TRUE),
+    p75_income = quantile(income, 0.75, na.rm=TRUE),
+    mean_income = mean(income, na.rm=TRUE),
+    SD_income = sd(income, na.rm=TRUE)
+  )
+median_household_income_at_time_of_epilepsy_surgery
+
+
+
+
+# Pediatric medical complexity algorithm
+PMCA <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>%  
+  reframe(
+    PMCA = CrossTable(PMCA_Category_Title)
+  )   
+
+
+PMCA_with_epilepsy_surgery <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>%  
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  reframe(
+    PMCA = CrossTable(PMCA_Category_Title)
+  )   
+
+
+PMCA_without_epilepsy_surgery <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>%  
+  filter(epilepsy_surgery_yes_no == "no") %>% 
+  reframe(
+    PMCA = CrossTable(PMCA_Category_Title)
+  )  
+```
+
+
+
+
+
+
+
+
+## 4. Main clinical outcomes
+
+
+
+
+Surgery types
+```{r}
+# Proportion of patients with any epilepsy surgery
+total_patients_with_epilepsy_surgery <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>% 
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  nrow()
+total_patients_with_epilepsy_surgery
+total_patients_with_epilepsy_surgery/total_patients
+
+
+total_patients_with_epilepsy_surgery_per_person_year <- TSC_refractory_epilepsy_person_years %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>% 
+  summarize(
+    total_first_epilepsy_surgeries = sum(epilepsy_surgery_number),
+    total_person_years_refractory_epilepsy_to_surgery = sum(person_years_refractory_epilepsy_to_surgery),
+    epilepsy_surgery_per_person_year =  total_first_epilepsy_surgeries / total_person_years_refractory_epilepsy_to_surgery
+  )
+total_patients_with_epilepsy_surgery_per_person_year
+  
+
+total_epilepsy_surgeries <- TSC_refractory_epilepsy %>% 
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  nrow()
+total_epilepsy_surgeries
+
+
+number_epilepsy_surgeries_per_patient <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>% 
+  reframe(
+    surgeries_per_patient = CrossTable(epilepsy_surgery_total_number)
+  )
+
+
+
+
+# Type of surgery: lobectomy 
+lobectomy <- TSC_refractory_epilepsy %>% 
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  reframe(
+    lobectomy = CrossTable(lobectomy)
+  )
+
+
+lobectomy_first_epilepsy_surgery <- TSC_refractory_epilepsy %>% 
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  filter(epilepsy_surgery_number == 1) %>% 
+  reframe(
+    lobectomy = CrossTable(lobectomy)
+  )
+
+
+lobectomy_subsequent_epilepsy_surgery <- TSC_refractory_epilepsy %>% 
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  filter(epilepsy_surgery_number != 1) %>% 
+  reframe(
+    lobectomy = CrossTable(lobectomy)
+  )
+
+
+
+
+# Type of surgery: hemispherectomy 
+hemispherectomy <- TSC_refractory_epilepsy %>% 
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  reframe(
+    hemispherectomy = CrossTable(hemispherectomy)
+  )
+
+
+hemispherectomy_first_epilepsy_surgery <- TSC_refractory_epilepsy %>% 
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  filter(epilepsy_surgery_number == 1) %>% 
+  reframe(
+    hemispherectomy = CrossTable(hemispherectomy)
+  )
+
+
+hemispherectomy_subsequent_epilepsy_surgery <- TSC_refractory_epilepsy %>% 
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  filter(epilepsy_surgery_number != 1) %>% 
+  reframe(
+    hemispherectomy = CrossTable(hemispherectomy)
+  )
+
+
+
+
+# Type of surgery: excision, disconnection, or destruction 
+excision <- TSC_refractory_epilepsy %>% 
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  reframe(
+    excision = CrossTable(other_excision_or_disconnection_or_destruction)
+  )
+
+
+excision_first_epilepsy_surgery <- TSC_refractory_epilepsy %>% 
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  filter(epilepsy_surgery_number == 1) %>% 
+  reframe(
+    excision = CrossTable(other_excision_or_disconnection_or_destruction)
+  )
+
+
+excision_subsequent_epilepsy_surgery <- TSC_refractory_epilepsy %>% 
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  filter(epilepsy_surgery_number != 1) %>% 
+  reframe(
+    excision = CrossTable(other_excision_or_disconnection_or_destruction)
+  )
+
+
+
+
+# Type of surgery: LITT
+LITT <- TSC_refractory_epilepsy %>% 
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  reframe(
+    LITT = CrossTable(LITT)
+  )
+
+
+LITT_first_epilepsy_surgery <- TSC_refractory_epilepsy %>% 
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  filter(epilepsy_surgery_number == 1) %>% 
+  reframe(
+    LITT = CrossTable(LITT)
+  )
+
+
+LITT_subsequent_epilepsy_surgery <- TSC_refractory_epilepsy %>% 
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  filter(epilepsy_surgery_number != 1) %>% 
+  reframe(
+    LITT = CrossTable(LITT)
+  )
+
+
+
+
+# Type of surgery: intracranial neurostimulator
+intracranial_neurostimulator <- TSC_refractory_epilepsy %>% 
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  reframe(
+    intracranial_neurostimulator = CrossTable(intracranial_neurostimulator)
+  )
+
+
+intracranial_neurostimulator_first_epilepsy_surgery <- TSC_refractory_epilepsy %>% 
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  filter(epilepsy_surgery_number == 1) %>% 
+  reframe(
+    intracranial_neurostimulator = CrossTable(intracranial_neurostimulator)
+  )
+
+
+intracranial_neurostimulator_subsequent_epilepsy_surgery <- TSC_refractory_epilepsy %>% 
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  filter(epilepsy_surgery_number != 1) %>% 
+  reframe(
+    intracranial_neurostimulator = CrossTable(intracranial_neurostimulator)
+  )
+
+
+
+
+# Subsequent surgeries in patients with lobectomy as first surgery
+lobectomy_first_epilepsy_surgery_subsequent_surgeries <- TSC_refractory_epilepsy %>% 
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  filter(epilepsy_surgery_number == 1) %>% 
+  filter(lobectomy=="yes") %>% 
+  filter(epilepsy_surgery_total_number > 1) %>% 
+  select(Medical_Record_Number) %>% 
+    left_join(TSC_refractory_epilepsy, by="Medical_Record_Number") %>% 
+  group_by(epilepsy_surgery_number) %>% 
+  summarize(lobectomies = sum(lobectomy=="yes"),
+            hemispherectomies = sum(hemispherectomy=="yes"),
+            other_excisions_or_disconnections_or_destructions = sum(other_excision_or_disconnection_or_destruction=="yes"),
+            LITTs = sum(LITT=="yes"),
+            intracranial_neurostimulators = sum(intracranial_neurostimulator=="yes"),
+            total = n())
+lobectomy_first_epilepsy_surgery_subsequent_surgeries
+
+
+
+
+# Subsequent surgeries in patients with hemispherectomy as first surgery
+hemispherectomy_first_epilepsy_surgery_subsequent_surgeries <- TSC_refractory_epilepsy %>% 
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  filter(epilepsy_surgery_number == 1) %>% 
+  filter(hemispherectomy=="yes") %>% 
+  filter(epilepsy_surgery_total_number > 1) %>% 
+  select(Medical_Record_Number) %>% 
+    left_join(TSC_refractory_epilepsy, by="Medical_Record_Number") %>% 
+  group_by(epilepsy_surgery_number) %>% 
+  summarize(lobectomies = sum(lobectomy=="yes"),
+            hemispherectomies = sum(hemispherectomy=="yes"),
+            other_excisions_or_disconnections_or_destructions = sum(other_excision_or_disconnection_or_destruction=="yes"),
+            LITTs = sum(LITT=="yes"),
+            intracranial_neurostimulators = sum(intracranial_neurostimulator=="yes"),
+            total = n())
+hemispherectomy_first_epilepsy_surgery_subsequent_surgeries
+
+
+
+
+# Subsequent surgeries in patients with other_excision or disconnection or destruction as first surgery
+other_excision_or_disconnection_or_destruction_first_epilepsy_surgery_subsequent_surgeries <- TSC_refractory_epilepsy %>% 
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  filter(epilepsy_surgery_number == 1) %>% 
+  filter(other_excision_or_disconnection_or_destruction=="yes") %>% 
+  filter(epilepsy_surgery_total_number > 1) %>% 
+  select(Medical_Record_Number) %>% 
+    left_join(TSC_refractory_epilepsy, by="Medical_Record_Number") %>% 
+  group_by(epilepsy_surgery_number) %>% 
+  summarize(lobectomies = sum(lobectomy=="yes"),
+            hemispherectomies = sum(hemispherectomy=="yes"),
+            other_excisions_or_disconnections_or_destructions = sum(other_excision_or_disconnection_or_destruction=="yes"),
+            LITTs = sum(LITT=="yes"),
+            intracranial_neurostimulators = sum(intracranial_neurostimulator=="yes"),
+            total = n())
+other_excision_or_disconnection_or_destruction_first_epilepsy_surgery_subsequent_surgeries
+
+
+
+
+# Subsequent surgeries in patients with LITT as first surgery
+LITT_first_epilepsy_surgery_subsequent_surgeries <- TSC_refractory_epilepsy %>% 
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  filter(epilepsy_surgery_number == 1) %>% 
+  filter(LITT=="yes") %>% 
+  filter(epilepsy_surgery_total_number > 1) %>% 
+  select(Medical_Record_Number) %>% 
+    left_join(TSC_refractory_epilepsy, by="Medical_Record_Number") %>% 
+  group_by(epilepsy_surgery_number) %>% 
+  summarize(lobectomies = sum(lobectomy=="yes"),
+            hemispherectomies = sum(hemispherectomy=="yes"),
+            other_excisions_or_disconnections_or_destructions = sum(other_excision_or_disconnection_or_destruction=="yes"),
+            LITTs = sum(LITT=="yes"),
+            intracranial_neurostimulators = sum(intracranial_neurostimulator=="yes"),
+            total = n())
+LITT_first_epilepsy_surgery_subsequent_surgeries
+  
+  
+
+
+# Subsequent surgeries in patients with intracranial neurostimulator as first surgery
+intracranial_neurostimulator_first_epilepsy_surgery_subsequent_surgeries <- TSC_refractory_epilepsy %>% 
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  filter(epilepsy_surgery_number == 1) %>% 
+  filter(intracranial_neurostimulator=="yes") %>% 
+  filter(epilepsy_surgery_total_number > 1) %>% 
+  select(Medical_Record_Number) %>% 
+    left_join(TSC_refractory_epilepsy, by="Medical_Record_Number") %>% 
+  group_by(epilepsy_surgery_number) %>% 
+  summarize(lobectomies = sum(lobectomy=="yes"),
+            hemispherectomies = sum(hemispherectomy=="yes"),
+            other_excisions_or_disconnections_or_destructions = sum(other_excision_or_disconnection_or_destruction=="yes"),
+            LITTs = sum(LITT=="yes"),
+            intracranial_neurostimulators = sum(intracranial_neurostimulator=="yes"),
+            total = n())
+intracranial_neurostimulator_first_epilepsy_surgery_subsequent_surgeries
+```
+
+
+
+
+Epilepsy surgery over the years
+```{r}
+# Patients by type of follow-up
+follow_up_groups <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all = TRUE) %>% 
+  reframe(
+    follow_up_groups = CrossTable(follow_up_1_y_before_1_y_after_surgery)
+    )
+
+
+
+
+# Epilepsy surgery by type of follow-up
+epilepsy_surgery_by_follow_up_groups <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all = TRUE) %>% 
+  reframe(
+    epilepsy_surgery_by_follow_up_groups = CrossTable(follow_up_1_y_before_1_y_after_surgery, epilepsy_surgery_yes_no)
+    )
+
+
+
+
+######################################With long follow-up######################################
+# Total first epilepsy surgeries in patients with long follow-up per periods of 3 years
+total_patients_with_epilepsy_surgery_per_person_year_over_3_years_periods <- TSC_refractory_epilepsy_person_years %>% 
+  distinct(Medical_Record_Number, year_follow_up, .keep_all=TRUE) %>% 
+  filter(follow_up_1_y_before_1_y_after_surgery == "yes") %>% 
+  mutate(three_year_period = factor(case_when(
+      ( (year_follow_up == 2004) | (year_follow_up == 2005) | (year_follow_up == 2006) ) ~ "2004-2006",
+      ( (year_follow_up == 2007) | (year_follow_up == 2008) | (year_follow_up == 2009) ) ~ "2007-2009",
+      ( (year_follow_up == 2010) | (year_follow_up == 2011) | (year_follow_up == 2012) ) ~ "2010-2012",
+      ( (year_follow_up == 2013) | (year_follow_up == 2014) | (year_follow_up == 2015) ) ~ "2013-2015",
+      ( (year_follow_up == 2016) | (year_follow_up == 2017) | (year_follow_up == 2018) ) ~ "2016-2018",   
+      ( (year_follow_up == 2019) | (year_follow_up == 2020) | (year_follow_up == 2021) ) ~ "2019-2021", 
+      ( (year_follow_up == 2022) | (year_follow_up == 2023) | (year_follow_up == 2024) ) ~ "2022-2024"),            
+      levels = c("2004-2006", "2007-2009", "2010-2012", "2013-2015", "2016-2018", "2019-2021", "2022-2024"))
+  ) %>% 
+  group_by(three_year_period) %>% 
+  summarize(
+    total_first_epilepsy_surgeries_per_3_year_period = sum(first_epilepsy_surgery_per_year),
+    total_person_years_refractory_epilepsy_to_surgery_per_3_year_period = sum(person_years_refractory_epilepsy_to_surgery_per_year),
+    epilepsy_surgery_per_person_year_per_3_year_period = total_first_epilepsy_surgeries_per_3_year_period / total_person_years_refractory_epilepsy_to_surgery_per_3_year_period
+  ) %>% 
+  ungroup() %>% 
+  mutate(total_surgeries = sum(total_first_epilepsy_surgeries_per_3_year_period),
+         total_person_years = sum(total_person_years_refractory_epilepsy_to_surgery_per_3_year_period),
+         total_surgeries_per_person_years = total_surgeries/total_person_years)
+total_patients_with_epilepsy_surgery_per_person_year_over_3_years_periods
+
+
+
+
+# Jonckheere Terpstra test on trend over 3 year periods of absolute number of epilepsy surgeries
+JonckheereTerpstraTest(total_first_epilepsy_surgeries_per_3_year_period ~ three_year_period, data=total_patients_with_epilepsy_surgery_per_person_year_over_3_years_periods, alternative="increasing")
+jonckheere_epilepsy_surgery_absolute_number_over_3_year_periods_increasing_p_value <- JonckheereTerpstraTest(total_first_epilepsy_surgeries_per_3_year_period ~ three_year_period, data=total_patients_with_epilepsy_surgery_per_person_year_over_3_years_periods, alternative="increasing")$p.value
+jonckheere_epilepsy_surgery_absolute_number_over_3_year_periods_increasing_p_value
+
+
+JonckheereTerpstraTest(total_first_epilepsy_surgeries_per_3_year_period ~ three_year_period, data=total_patients_with_epilepsy_surgery_per_person_year_over_3_years_periods, alternative="decreasing")
+jonckheere_epilepsy_surgery_absolute_number_over_3_year_periods_decreasing_p_value <- JonckheereTerpstraTest(total_first_epilepsy_surgeries_per_3_year_period ~ three_year_period, data=total_patients_with_epilepsy_surgery_per_person_year_over_3_years_periods, alternative="decreasing")$p.value
+jonckheere_epilepsy_surgery_absolute_number_over_3_year_periods_decreasing_p_value
+
+
+
+
+# Jonckheere Terpstra test on trend over 3 year periods of epilepsy surgeries per person year
+JonckheereTerpstraTest(epilepsy_surgery_per_person_year_per_3_year_period ~ three_year_period, data=total_patients_with_epilepsy_surgery_per_person_year_over_3_years_periods, alternative="increasing")
+jonckheere_epilepsy_surgery_per_person_year_over_3_year_periods_increasing_p_value <- JonckheereTerpstraTest(epilepsy_surgery_per_person_year_per_3_year_period ~ three_year_period, data=total_patients_with_epilepsy_surgery_per_person_year_over_3_years_periods, alternative="increasing")$p.value
+jonckheere_epilepsy_surgery_per_person_year_over_3_year_periods_increasing_p_value
+
+
+JonckheereTerpstraTest(epilepsy_surgery_per_person_year_per_3_year_period ~ three_year_period, data=total_patients_with_epilepsy_surgery_per_person_year_over_3_years_periods, alternative="decreasing")
+jonckheere_epilepsy_surgery_per_person_year_over_3_year_periods_decreasing_p_value <- JonckheereTerpstraTest(epilepsy_surgery_per_person_year_per_3_year_period ~ three_year_period, data=total_patients_with_epilepsy_surgery_per_person_year_over_3_years_periods, alternative="decreasing")$p.value
+jonckheere_epilepsy_surgery_per_person_year_over_3_year_periods_decreasing_p_value
+
+
+
+
+# Figure total number of epilepsy surgeries per 3 year periods long follow-up
+epilepsy_surgeries_absolute_number_long_follow_up_plot <- ggplot(data=total_patients_with_epilepsy_surgery_per_person_year_over_3_years_periods,
+       aes(x=three_year_period, y=total_first_epilepsy_surgeries_per_3_year_period, group=1)) +
+  geom_line(lwd=1.5, color="darkgreen") +
+  theme(legend.position="none", panel.background=element_blank(), panel.grid.major=element_blank(),
+        panel.grid.minor=element_blank(), panel.border=element_blank(), axis.ticks=element_blank(),
+        axis.text=element_text(size=14, face="bold"), axis.text.x=element_text(angle=45, hjust=1),
+        axis.title=element_text(size=20, face="bold"),
+  axis.title.x=element_text(margin=margin(t=10, r=10, b=10, l=10)),
+  axis.title.y=element_text(margin=margin(t=10, r=10, b=10, l=10))) +
+  scale_x_discrete(name="Years") +
+  scale_y_continuous(name="Number of surgeries", breaks=c(0, 10, 20, 30, 40, 50), limits = c(0, 50))
+epilepsy_surgeries_absolute_number_long_follow_up_plot
+
+
+
+
+# Figure epilepsy surgeries per person-year per 3 year periods long follow-up
+epilepsy_surgeries_per_person_year_long_follow_up_plot <- ggplot(data=total_patients_with_epilepsy_surgery_per_person_year_over_3_years_periods,
+       aes(x=three_year_period, y=epilepsy_surgery_per_person_year_per_3_year_period*100, group=1)) +
+  geom_line(lwd=1.5, color="darkgreen") +
+  theme(legend.position="none", panel.background=element_blank(), panel.grid.major=element_blank(),
+        panel.grid.minor=element_blank(), panel.border=element_blank(), axis.ticks=element_blank(),
+        axis.text=element_text(size=14, face="bold"), axis.text.x=element_text(angle=45, hjust=1),
+        axis.title=element_text(size=20, face="bold"),
+  axis.title.x=element_text(margin=margin(t=10, r=10, b=10, l=10)),
+  axis.title.y=element_text(margin=margin(t=10, r=10, b=10, l=10))) +
+  scale_x_discrete(name="Years") +
+  scale_y_continuous(name="Surgeries / 100 person-years", breaks=c(0, 1, 2, 3, 4, 5), limits = c(0, 5))
+epilepsy_surgeries_per_person_year_long_follow_up_plot
+
+
+
+
+# Age at first epilepsy surgery per 3 year periods in patients with long follow-up
+age_at_first_epilepsy_surgery_over_3_year_periods <- TSC_refractory_epilepsy_person_years %>% 
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  filter(follow_up_1_y_before_1_y_after_surgery == "yes") %>%
+  distinct(Medical_Record_Number, year_follow_up, .keep_all=TRUE) %>% 
+  mutate(
+    age_first_epilepsy_surgery = as.numeric(first_epilepsy_surgery_date - DOB)/ 365.24219
+  ) %>% 
+  mutate(
+    age_first_epilepsy_surgery_per_year = case_when(
+      (first_epilepsy_surgery_per_year == 1) ~ age_first_epilepsy_surgery,
+      TRUE ~ NA)
+  ) %>% 
+  mutate(three_year_period = factor(case_when(
+      ( (year_follow_up == 2004) | (year_follow_up == 2005) | (year_follow_up == 2006) ) ~ "2004-2006",
+      ( (year_follow_up == 2007) | (year_follow_up == 2008) | (year_follow_up == 2009) ) ~ "2007-2009",
+      ( (year_follow_up == 2010) | (year_follow_up == 2011) | (year_follow_up == 2012) ) ~ "2010-2012",
+      ( (year_follow_up == 2013) | (year_follow_up == 2014) | (year_follow_up == 2015) ) ~ "2013-2015",
+      ( (year_follow_up == 2016) | (year_follow_up == 2017) | (year_follow_up == 2018) ) ~ "2016-2018",   
+      ( (year_follow_up == 2019) | (year_follow_up == 2020) | (year_follow_up == 2021) ) ~ "2019-2021", 
+      ( (year_follow_up == 2022) | (year_follow_up == 2023) | (year_follow_up == 2024) ) ~ "2022-2024"),            
+      levels = c("2004-2006", "2007-2009", "2010-2012", "2013-2015", "2016-2018", "2019-2021", "2022-2024"))
+  ) %>% 
+  group_by(three_year_period) %>% 
+  summarize(
+    median_age = median(age_first_epilepsy_surgery_per_year, na.rm=TRUE),
+    p25_age = quantile(age_first_epilepsy_surgery_per_year, 0.25, na.rm=TRUE),
+    p75_age = quantile(age_first_epilepsy_surgery_per_year, 0.75, na.rm=TRUE),
+    mean_age = mean(age_first_epilepsy_surgery_per_year, na.rm=TRUE),
+    SD_age = sd(age_first_epilepsy_surgery_per_year, na.rm=TRUE)
+  ) %>% 
+  ungroup()
+age_at_first_epilepsy_surgery_over_3_year_periods
+
+
+
+
+# Age at first epilepsy surgery total in patients with long follow-up
+age_at_first_epilepsy_surgery_long_follow_up <- TSC_refractory_epilepsy_person_years %>% 
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  filter(follow_up_1_y_before_1_y_after_surgery == "yes") %>%
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>% 
+  mutate(
+    age_first_epilepsy_surgery = as.numeric(first_epilepsy_surgery_date - DOB)/ 365.24219
+  ) %>% 
+  summarize(
+    median_age = median(age_first_epilepsy_surgery, na.rm=TRUE),
+    p25_age = quantile(age_first_epilepsy_surgery, 0.25, na.rm=TRUE),
+    p75_age = quantile(age_first_epilepsy_surgery, 0.75, na.rm=TRUE),
+    mean_age = mean(age_first_epilepsy_surgery, na.rm=TRUE),
+    SD_age = sd(age_first_epilepsy_surgery, na.rm=TRUE)
+  )
+age_at_first_epilepsy_surgery_long_follow_up
+
+
+
+
+# Jonckheere Terpstra test on trend of age at first epilepsy surgery per year in patients with long follow-up
+JonckheereTerpstraTest(median_age ~ three_year_period, data=age_at_first_epilepsy_surgery_over_3_year_periods, alternative="increasing")
+jonckheere_age_at_first_epilepsy_surgery_over_the_years_per_3_year_periods_increasing_p_value <- JonckheereTerpstraTest(median_age ~ three_year_period, data=age_at_first_epilepsy_surgery_over_3_year_periods, alternative="increasing")$p.value
+jonckheere_age_at_first_epilepsy_surgery_over_the_years_per_3_year_periods_increasing_p_value
+
+
+JonckheereTerpstraTest(median_age ~ three_year_period, data=age_at_first_epilepsy_surgery_over_3_year_periods, alternative="decreasing")
+jonckheere_age_at_first_epilepsy_surgery_over_the_years_per_3_year_periods_decreasing_p_value <- JonckheereTerpstraTest(median_age ~ three_year_period, data=age_at_first_epilepsy_surgery_over_3_year_periods, alternative="decreasing")$p.value
+jonckheere_age_at_first_epilepsy_surgery_over_the_years_per_3_year_periods_decreasing_p_value
+
+
+
+
+# Figure age at first epilepsy surgery long follow-up
+age_at_first_epilepsy_surgery_over_3_year_periods_long_term_plot <- ggplot(data=age_at_first_epilepsy_surgery_over_3_year_periods) + 
+  geom_line(aes(x=three_year_period, y=median_age, group=1), color="darkblue", lwd=1.5) + 
+  geom_line(aes(x=three_year_period, y=p25_age, group=1), color="darkblue", lwd=1, lty=2) + 
+  geom_line(aes(x=three_year_period, y=p75_age, group=1), color="darkblue", lwd=1, lty=2) + 
+  geom_ribbon(aes(x=three_year_period, ymin=p25_age, ymax=p75_age, group=1), fill="darkblue", alpha=0.1) +
+  theme(legend.position="none", panel.background=element_blank(), panel.grid.major=element_blank(), panel.grid.minor=element_blank(), panel.border=element_blank(), axis.ticks=element_blank(),
+        axis.text=element_text(size=14, face="bold"), axis.text.x=element_text(angle=45, hjust=1),
+        axis.title=element_text(size=20, face="bold"),
+  axis.title.x=element_text(margin=margin(t=10, r=10, b=10, l=10)),
+  axis.title.y=element_text(margin=margin(t=10, r=10, b=10, l=10))) +
+  scale_x_discrete(name="Year") +
+  scale_y_continuous(name="Median (p25-p75) age", breaks=c(0, 4, 8, 12, 16), limits = c(0, 16))
+age_at_first_epilepsy_surgery_over_3_year_periods_long_term_plot
+
+
+
+
+######################################Without long follow-up######################################
+# Total first epilepsy surgeries in patients without long follow-up per periods of 3 years
+total_patients_with_epilepsy_surgery_without_long_follow_up_over_3_years_periods <- TSC_refractory_epilepsy_person_years %>% 
+  distinct(Medical_Record_Number, year_follow_up, .keep_all=TRUE) %>% 
+  filter(follow_up_1_y_before_1_y_after_surgery == "no") %>% 
+  mutate(three_year_period = factor(case_when(
+      ( (year_follow_up == 2004) | (year_follow_up == 2005) | (year_follow_up == 2006) ) ~ "2004-2006",
+      ( (year_follow_up == 2007) | (year_follow_up == 2008) | (year_follow_up == 2009) ) ~ "2007-2009",
+      ( (year_follow_up == 2010) | (year_follow_up == 2011) | (year_follow_up == 2012) ) ~ "2010-2012",
+      ( (year_follow_up == 2013) | (year_follow_up == 2014) | (year_follow_up == 2015) ) ~ "2013-2015",
+      ( (year_follow_up == 2016) | (year_follow_up == 2017) | (year_follow_up == 2018) ) ~ "2016-2018",   
+      ( (year_follow_up == 2019) | (year_follow_up == 2020) | (year_follow_up == 2021) ) ~ "2019-2021", 
+      ( (year_follow_up == 2022) | (year_follow_up == 2023) | (year_follow_up == 2024) ) ~ "2022-2024"),            
+      levels = c("2004-2006", "2007-2009", "2010-2012", "2013-2015", "2016-2018", "2019-2021", "2022-2024"))
+  ) %>% 
+  group_by(three_year_period) %>% 
+  summarize(
+    total_first_epilepsy_surgeries_per_3_year_period = sum(first_epilepsy_surgery_per_year)
+  ) %>% 
+  ungroup() %>% 
+  mutate(total_surgeries = sum(total_first_epilepsy_surgeries_per_3_year_period))
+total_patients_with_epilepsy_surgery_without_long_follow_up_over_3_years_periods
+
+
+
+
+# Jonckheere Terpstra test on trend over 3 year periods of absolute number of epilepsy surgeries in patients without long-term follow-up
+JonckheereTerpstraTest(total_first_epilepsy_surgeries_per_3_year_period ~ three_year_period, data=total_patients_with_epilepsy_surgery_without_long_follow_up_over_3_years_periods, alternative="increasing")
+jonckheere_epilepsy_surgery_absolute_number_without_long_term_follow_up_over_3_year_periods_increasing_p_value <- JonckheereTerpstraTest(total_first_epilepsy_surgeries_per_3_year_period ~ three_year_period, data=total_patients_with_epilepsy_surgery_without_long_follow_up_over_3_years_periods, alternative="increasing")$p.value
+jonckheere_epilepsy_surgery_absolute_number_without_long_term_follow_up_over_3_year_periods_increasing_p_value
+
+
+JonckheereTerpstraTest(total_first_epilepsy_surgeries_per_3_year_period ~ three_year_period, data=total_patients_with_epilepsy_surgery_without_long_follow_up_over_3_years_periods, alternative="decreasing")
+jonckheere_epilepsy_surgery_absolute_number_without_long_term_follow_up_over_3_year_periods_decreasing_p_value <- JonckheereTerpstraTest(total_first_epilepsy_surgeries_per_3_year_period ~ three_year_period, data=total_patients_with_epilepsy_surgery_without_long_follow_up_over_3_years_periods, alternative="decreasing")$p.value
+jonckheere_epilepsy_surgery_absolute_number_without_long_term_follow_up_over_3_year_periods_decreasing_p_value
+
+
+
+
+# Figure total number of epilepsy surgeries per 3 year periods without long follow-up
+epilepsy_surgeries_absolute_number_without_long_follow_up_plot <- ggplot(data=total_patients_with_epilepsy_surgery_without_long_follow_up_over_3_years_periods,
+       aes(x=three_year_period, y=total_first_epilepsy_surgeries_per_3_year_period, group=1)) +
+  geom_line(lwd=1.5, color="darkgreen") +
+  theme(legend.position="none", panel.background=element_blank(), panel.grid.major=element_blank(),
+        panel.grid.minor=element_blank(), panel.border=element_blank(), axis.ticks=element_blank(),
+        axis.text=element_text(size=14, face="bold"), axis.text.x=element_text(angle=45, hjust=1),
+        axis.title=element_text(size=20, face="bold"),
+  axis.title.x=element_text(margin=margin(t=10, r=10, b=10, l=10)),
+  axis.title.y=element_text(margin=margin(t=10, r=10, b=10, l=10))) +
+  scale_x_discrete(name="Years") +
+  scale_y_continuous(name="Number of surgeries", breaks=c(0, 25, 50, 75, 100, 125, 150), limits = c(0, 150))
+epilepsy_surgeries_absolute_number_without_long_follow_up_plot
+
+
+
+
+# Age at first epilepsy surgery per 3 year periods in patients without long follow-up
+age_at_first_epilepsy_surgery_no_long_term_follow_up_over_3_year_periods <- TSC_refractory_epilepsy_person_years %>% 
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  filter(follow_up_1_y_before_1_y_after_surgery == "no") %>%
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>% 
+  mutate(
+    age_first_epilepsy_surgery = as.numeric(first_epilepsy_surgery_date - DOB)/ 365.24219
+  ) %>% 
+  mutate(three_year_period = factor(case_when(
+      ( (year_follow_up == 2004) | (year_follow_up == 2005) | (year_follow_up == 2006) ) ~ "2004-2006",
+      ( (year_follow_up == 2007) | (year_follow_up == 2008) | (year_follow_up == 2009) ) ~ "2007-2009",
+      ( (year_follow_up == 2010) | (year_follow_up == 2011) | (year_follow_up == 2012) ) ~ "2010-2012",
+      ( (year_follow_up == 2013) | (year_follow_up == 2014) | (year_follow_up == 2015) ) ~ "2013-2015",
+      ( (year_follow_up == 2016) | (year_follow_up == 2017) | (year_follow_up == 2018) ) ~ "2016-2018",   
+      ( (year_follow_up == 2019) | (year_follow_up == 2020) | (year_follow_up == 2021) ) ~ "2019-2021", 
+      ( (year_follow_up == 2022) | (year_follow_up == 2023) | (year_follow_up == 2024) ) ~ "2022-2024"),            
+      levels = c("2004-2006", "2007-2009", "2010-2012", "2013-2015", "2016-2018", "2019-2021", "2022-2024"))
+  ) %>% 
+  group_by(three_year_period) %>% 
+  summarize(
+    median_age = median(age_first_epilepsy_surgery, na.rm=TRUE),
+    p25_age = quantile(age_first_epilepsy_surgery, 0.25, na.rm=TRUE),
+    p75_age = quantile(age_first_epilepsy_surgery, 0.75, na.rm=TRUE),
+    mean_age = mean(age_first_epilepsy_surgery, na.rm=TRUE),
+    SD_age = sd(age_first_epilepsy_surgery, na.rm=TRUE)
+  ) %>% 
+  ungroup()
+age_at_first_epilepsy_surgery_no_long_term_follow_up_over_3_year_periods
+
+
+
+
+# Age at first epilepsy surgery total in patients without long follow-up
+age_at_first_epilepsy_surgery_without_long_follow_up <- TSC_refractory_epilepsy_person_years %>% 
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  filter(follow_up_1_y_before_1_y_after_surgery == "no") %>%
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>% 
+  mutate(
+    age_first_epilepsy_surgery = as.numeric(first_epilepsy_surgery_date - DOB)/ 365.24219
+  ) %>% 
+  summarize(
+    median_age = median(age_first_epilepsy_surgery, na.rm=TRUE),
+    p25_age = quantile(age_first_epilepsy_surgery, 0.25, na.rm=TRUE),
+    p75_age = quantile(age_first_epilepsy_surgery, 0.75, na.rm=TRUE),
+    mean_age = mean(age_first_epilepsy_surgery, na.rm=TRUE),
+    SD_age = sd(age_first_epilepsy_surgery, na.rm=TRUE)
+  )
+age_at_first_epilepsy_surgery_without_long_follow_up
+
+
+
+
+# Jonckheere Terpstra test on trend of age at first epilepsy surgery per year in patients without long follow-up
+JonckheereTerpstraTest(median_age ~ three_year_period, data=age_at_first_epilepsy_surgery_no_long_term_follow_up_over_3_year_periods, alternative="increasing")
+jonckheere_age_at_first_epilepsy_surgery_over_the_years_without_long_follow_up_per_3_year_periods_increasing_p_value <- JonckheereTerpstraTest(median_age ~ three_year_period, data=age_at_first_epilepsy_surgery_no_long_term_follow_up_over_3_year_periods, alternative="increasing")$p.value
+jonckheere_age_at_first_epilepsy_surgery_over_the_years_without_long_follow_up_per_3_year_periods_increasing_p_value
+
+
+JonckheereTerpstraTest(median_age ~ three_year_period, data=age_at_first_epilepsy_surgery_no_long_term_follow_up_over_3_year_periods, alternative="decreasing")
+jonckheere_age_at_first_epilepsy_surgery_over_the_years_without_long_follow_up_per_3_year_periods_decreasing_p_value <- JonckheereTerpstraTest(median_age ~ three_year_period, data=age_at_first_epilepsy_surgery_no_long_term_follow_up_over_3_year_periods, alternative="decreasing")$p.value
+jonckheere_age_at_first_epilepsy_surgery_over_the_years_without_long_follow_up_per_3_year_periods_decreasing_p_value
+
+
+
+
+# Figure age at first epilepsy surgery without long follow-up
+age_at_first_epilepsy_surgery_over_3_year_periods_without_long_term_plot <- ggplot(data=age_at_first_epilepsy_surgery_no_long_term_follow_up_over_3_year_periods) + 
+  geom_line(aes(x=three_year_period, y=median_age, group=1), color="darkblue", lwd=1.5) + 
+  geom_line(aes(x=three_year_period, y=p25_age, group=1), color="darkblue", lwd=1, lty=2) + 
+  geom_line(aes(x=three_year_period, y=p75_age, group=1), color="darkblue", lwd=1, lty=2) + 
+  geom_ribbon(aes(x=three_year_period, ymin=p25_age, ymax=p75_age, group=1), fill="darkblue", alpha=0.1) +
+  theme(legend.position="none", panel.background=element_blank(), panel.grid.major=element_blank(), panel.grid.minor=element_blank(), panel.border=element_blank(), axis.ticks=element_blank(),
+        axis.text=element_text(size=14, face="bold"), axis.text.x=element_text(angle=45, hjust=1),
+        axis.title=element_text(size=20, face="bold"),
+  axis.title.x=element_text(margin=margin(t=10, r=10, b=10, l=10)),
+  axis.title.y=element_text(margin=margin(t=10, r=10, b=10, l=10))) +
+  scale_x_discrete(name="Year") +
+  scale_y_continuous(name="Median (p25-p75) age", breaks=c(0, 4, 8, 12, 16), limits = c(0, 16))
+age_at_first_epilepsy_surgery_over_3_year_periods_without_long_term_plot 
+```
+
+
+
+
+
+
+
+
+## 5. Healthcare utilization
+
+
+
+
+Healthcare utilization
+```{r}
+# Emergency department visits, hospital admissions, and hospital stays before and after first epilepsy surgery (only patients with only one epilepsy surgery and only patients with at least 1 year of follow-up before epilepsy surgery and at least 1 year of follow-up after epilepsy surgery)
+ED_IP_utilization_number <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>% 
+  filter(follow_up_1_y_before_1_y_after_surgery == "yes") %>% 
+  filter(epilepsy_surgery_total_number == 1) %>% 
+  select(Medical_Record_Number) %>% 
+  nrow()
+ED_IP_utilization_number
+
+
+
+
+# Summary of utilization and cost
+ED_IP_cost_utilization <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>% 
+  filter(follow_up_1_y_before_1_y_after_surgery == "yes") %>% 
+  filter(epilepsy_surgery_total_number == 1) %>% 
+  select(Medical_Record_Number) %>% 
+  left_join(TSC_refractory_epilepsy_healthcare_utilization, by = "Medical_Record_Number") %>% 
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  mutate(ED_visit_before_surgery = case_when(
+    ( (Patient_Type_Title == "ED Visit") & (Discharge_Date < first_epilepsy_surgery_date) & (Discharge_Date >= first_refractory_epilepsy_diagnosis) ) ~ 1,
+    TRUE ~ 0),
+    ED_visit_after_surgery = case_when(
+    ( (Patient_Type_Title == "ED Visit") & (Discharge_Date > first_epilepsy_surgery_date) ) ~ 1,
+    TRUE ~ 0),
+    hospital_admission_before_surgery  = case_when(
+    ( ( (Patient_Type_Title == "Inpatient") | (Patient_Type_Title == "Obs Unit") ) & (Discharge_Date < first_epilepsy_surgery_date) & (Discharge_Date >= first_refractory_epilepsy_diagnosis) ) ~ 1,
+    TRUE ~ 0),
+    hospital_admission_after_surgery  = case_when(
+    ( ( (Patient_Type_Title == "Inpatient") | (Patient_Type_Title == "Obs Unit") ) & (Discharge_Date > first_epilepsy_surgery_date) ) ~ 1,
+    TRUE ~ 0),
+    hospital_admission_LOS_before_surgery = case_when(
+    ( ( (Patient_Type_Title == "Inpatient") | (Patient_Type_Title == "Obs Unit") ) & (Discharge_Date < first_epilepsy_surgery_date) & (Discharge_Date >= first_refractory_epilepsy_diagnosis) ) ~ Length_Of_Stay,
+    TRUE ~ 0),
+    hospital_admission_LOS_after_surgery = case_when(
+    ( ( (Patient_Type_Title == "Inpatient") | (Patient_Type_Title == "Obs Unit") ) & (Discharge_Date > first_epilepsy_surgery_date) ) ~ Length_Of_Stay,
+    TRUE ~ 0)    
+    ) %>% 
+  mutate(cost_before_surgery = case_when(
+    ( (Discharge_Date < first_epilepsy_surgery_date) & (Discharge_Date >= first_refractory_epilepsy_diagnosis) ) ~ Adj_Est_Cost,
+    TRUE ~ 0),
+    cost_during_surgery = case_when(
+    (Discharge_Date == first_epilepsy_surgery_date) ~ Adj_Est_Cost,
+    TRUE ~ 0),    
+    cost_after_surgery = case_when(
+    (Discharge_Date > first_epilepsy_surgery_date) ~ Adj_Est_Cost,
+    TRUE ~ 0)   
+    ) %>% 
+  group_by(Medical_Record_Number) %>% 
+  mutate(total_ED_visits_before_surgery = sum(ED_visit_before_surgery),
+         total_ED_visits_before_surgery_per_person_year = total_ED_visits_before_surgery/person_years_refractory_epilepsy_to_surgery,
+         total_ED_visits_after_surgery = sum(ED_visit_after_surgery),
+         total_ED_visits_after_surgery_per_person_year = total_ED_visits_after_surgery/person_years_surgery_to_last_encounter,
+         total_hospital_admission_before_surgery = sum(hospital_admission_before_surgery),
+         total_hospital_admission_before_surgery_per_person_year = total_hospital_admission_before_surgery/person_years_refractory_epilepsy_to_surgery,
+         total_hospital_admission_after_surgery = sum(hospital_admission_after_surgery),
+         total_hospital_admission_after_surgery_per_person_year = total_hospital_admission_after_surgery/person_years_surgery_to_last_encounter,
+         total_hospital_admission_LOS_before_surgery = sum(hospital_admission_LOS_before_surgery),
+         total_hospital_admission_LOS_before_surgery_per_person_year = total_hospital_admission_LOS_before_surgery/person_years_refractory_epilepsy_to_surgery,
+         total_hospital_admission_LOS_after_surgery = sum(hospital_admission_LOS_after_surgery),
+         total_hospital_admission_LOS_after_surgery_per_person_year = total_hospital_admission_LOS_after_surgery/person_years_surgery_to_last_encounter
+         ) %>% 
+  mutate(total_cost_before_surgery = sum(cost_before_surgery, na.rm=TRUE),
+         total_cost_before_surgery_per_person_year = total_cost_before_surgery/person_years_refractory_epilepsy_to_surgery,
+         total_cost_during_surgery = sum(cost_during_surgery, na.rm=TRUE),
+         total_cost_after_surgery = sum(cost_after_surgery, na.rm=TRUE),
+         total_cost_after_surgery_per_person_year = total_cost_after_surgery/person_years_surgery_to_last_encounter
+         ) %>% 
+  ungroup() %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>% 
+  summarize(
+    median_person_years_before_surgery = median(person_years_refractory_epilepsy_to_surgery),
+    p25_person_years_before_surgery = quantile(person_years_refractory_epilepsy_to_surgery, 0.25),
+    p75_person_years_before_surgery = quantile(person_years_refractory_epilepsy_to_surgery, 0.75),
+    mean_person_years_before_surgery = mean(person_years_refractory_epilepsy_to_surgery),
+    SD_person_years_before_surgery = sd(person_years_refractory_epilepsy_to_surgery),
+    median_person_years_after_surgery = median(person_years_surgery_to_last_encounter),
+    p25_person_years_after_surgery = quantile(person_years_surgery_to_last_encounter, 0.25),
+    p75_person_years_after_surgery = quantile(person_years_surgery_to_last_encounter, 0.75),
+    mean_person_years_after_surgery = mean(person_years_surgery_to_last_encounter),
+    SD_person_years_after_surgery = sd(person_years_surgery_to_last_encounter),
+    median_ED_visits_before_surgery = median(total_ED_visits_before_surgery),
+    p25_ED_visits_before_surgery = quantile(total_ED_visits_before_surgery, 0.25),
+    p75_ED_visits_before_surgery = quantile(total_ED_visits_before_surgery, 0.75),
+    mean_ED_visits_before_surgery = mean(total_ED_visits_before_surgery),
+    SD_ED_visits_before_surgery = sd(total_ED_visits_before_surgery),
+    median_ED_visits_before_surgery_per_person_year = median(total_ED_visits_before_surgery_per_person_year),
+    p25_ED_visits_before_surgery_per_person_year = quantile(total_ED_visits_before_surgery_per_person_year, 0.25),
+    p75_ED_visits_before_surgery_per_person_year = quantile(total_ED_visits_before_surgery_per_person_year, 0.75),
+    mean_ED_visits_before_surgery_per_person_year = mean(total_ED_visits_before_surgery_per_person_year),
+    SD_ED_visits_before_surgery_per_person_year = sd(total_ED_visits_before_surgery_per_person_year),
+    median_ED_visits_after_surgery = median(total_ED_visits_after_surgery),
+    p25_ED_visits_after_surgery = quantile(total_ED_visits_after_surgery, 0.25),
+    p75_ED_visits_after_surgery = quantile(total_ED_visits_after_surgery, 0.75),
+    mean_ED_visits_after_surgery = mean(total_ED_visits_after_surgery),
+    SD_ED_visits_after_surgery = sd(total_ED_visits_after_surgery),   
+    median_ED_visits_after_surgery_per_person_year = median(total_ED_visits_after_surgery_per_person_year),
+    p25_ED_visits_after_surgery_per_person_year = quantile(total_ED_visits_after_surgery_per_person_year, 0.25),
+    p75_ED_visits_after_surgery_per_person_year = quantile(total_ED_visits_after_surgery_per_person_year, 0.75),
+    mean_ED_visits_after_surgery_per_person_year = mean(total_ED_visits_after_surgery_per_person_year),
+    SD_ED_visits_after_surgery_per_person_year = sd(total_ED_visits_after_surgery_per_person_year),  
+    median_hospital_admission_before_surgery = median(total_hospital_admission_before_surgery),
+    p25_hospital_admission_before_surgery = quantile(total_hospital_admission_before_surgery, 0.25),
+    p75_hospital_admission_before_surgery = quantile(total_hospital_admission_before_surgery, 0.75),
+    mean_hospital_admission_before_surgery = mean(total_hospital_admission_before_surgery),
+    SD_hospital_admission_before_surgery = sd(total_hospital_admission_before_surgery),
+    median_hospital_admission_before_surgery_per_person_year = median(total_hospital_admission_before_surgery_per_person_year),
+    p25_hospital_admission_before_surgery_per_person_year = quantile(total_hospital_admission_before_surgery_per_person_year, 0.25),
+    p75_hospital_admission_before_surgery_per_person_year = quantile(total_hospital_admission_before_surgery_per_person_year, 0.75),
+    mean_hospital_admission_before_surgery_per_person_year = mean(total_hospital_admission_before_surgery_per_person_year),
+    SD_hospital_admission_before_surgery_per_person_year = sd(total_hospital_admission_before_surgery_per_person_year),    
+    median_hospital_admission_after_surgery = median(total_hospital_admission_after_surgery),
+    p25_hospital_admission_after_surgery = quantile(total_hospital_admission_after_surgery, 0.25),
+    p75_hospital_admission_after_surgery = quantile(total_hospital_admission_after_surgery, 0.75),
+    mean_hospital_admission_after_surgery = mean(total_hospital_admission_after_surgery),
+    SD_hospital_admission_after_surgery = sd(total_hospital_admission_after_surgery),  
+    median_hospital_admission_after_surgery_per_person_year = median(total_hospital_admission_after_surgery_per_person_year),
+    p25_hospital_admission_after_surgery_per_person_year = quantile(total_hospital_admission_after_surgery_per_person_year, 0.25),
+    p75_hospital_admission_after_surgery_per_person_year = quantile(total_hospital_admission_after_surgery_per_person_year, 0.75),
+    mean_hospital_admission_after_surgery_per_person_year = mean(total_hospital_admission_after_surgery_per_person_year),
+    SD_hospital_admission_after_surgery_per_person_year = sd(total_hospital_admission_after_surgery_per_person_year),      
+    median_hospital_admission_LOS_before_surgery = median(total_hospital_admission_LOS_before_surgery),
+    p25_hospital_admission_LOS_before_surgery = quantile(total_hospital_admission_LOS_before_surgery, 0.25),
+    p75_hospital_admission_LOS_before_surgery = quantile(total_hospital_admission_LOS_before_surgery, 0.75),
+    mean_hospital_admission_LOS_before_surgery = mean(total_hospital_admission_LOS_before_surgery),
+    SD_hospital_admission_LOS_before_surgery = sd(total_hospital_admission_LOS_before_surgery),
+    median_hospital_admission_LOS_before_surgery_per_person_year = median(total_hospital_admission_LOS_before_surgery_per_person_year),
+    p25_hospital_admission_LOS_before_surgery_per_person_year = quantile(total_hospital_admission_LOS_before_surgery_per_person_year, 0.25),
+    p75_hospital_admission_LOS_before_surgery_per_person_year = quantile(total_hospital_admission_LOS_before_surgery_per_person_year, 0.75),
+    mean_hospital_admission_LOS_before_surgery_per_person_year = mean(total_hospital_admission_LOS_before_surgery_per_person_year),
+    SD_hospital_admission_LOS_before_surgery_per_person_year = sd(total_hospital_admission_LOS_before_surgery_per_person_year),
+    median_hospital_admission_LOS_after_surgery = median(total_hospital_admission_LOS_after_surgery),
+    p25_hospital_admission_LOS_after_surgery = quantile(total_hospital_admission_LOS_after_surgery, 0.25),
+    p75_hospital_admission_LOS_after_surgery = quantile(total_hospital_admission_LOS_after_surgery, 0.75),
+    mean_hospital_admission_LOS_after_surgery = mean(total_hospital_admission_LOS_after_surgery),
+    SD_hospital_admission_LOS_after_surgery = sd(total_hospital_admission_LOS_after_surgery),
+    median_hospital_admission_LOS_after_surgery_per_person_year = median(total_hospital_admission_LOS_after_surgery_per_person_year),
+    p25_hospital_admission_LOS_after_surgery_per_person_year = quantile(total_hospital_admission_LOS_after_surgery_per_person_year, 0.25),
+    p75_hospital_admission_LOS_after_surgery_per_person_year = quantile(total_hospital_admission_LOS_after_surgery_per_person_year, 0.75),
+    mean_hospital_admission_LOS_after_surgery_per_person_year = mean(total_hospital_admission_LOS_after_surgery_per_person_year),
+    SD_hospital_admission_LOS_after_surgery_per_person_year = sd(total_hospital_admission_LOS_after_surgery_per_person_year),
+    median_cost_before_surgery = median(total_cost_before_surgery),
+    p25_cost_before_surgery = quantile(total_cost_before_surgery, 0.25),
+    p75_cost_before_surgery = quantile(total_cost_before_surgery, 0.75),
+    mean_cost_before_surgery = mean(total_cost_before_surgery),
+    SD_cost_before_surgery = sd(total_cost_before_surgery),
+    median_cost_before_surgery_per_person_year = median(total_cost_before_surgery_per_person_year),
+    p25_cost_before_surgery_per_person_year = quantile(total_cost_before_surgery_per_person_year, 0.25),
+    p75_cost_before_surgery_per_person_year = quantile(total_cost_before_surgery_per_person_year, 0.75),
+    mean_cost_before_surgery_per_person_year = mean(total_cost_before_surgery_per_person_year),
+    SD_cost_before_surgery_per_person_year = sd(total_cost_before_surgery_per_person_year),    
+    median_cost_during_surgery = median(total_cost_during_surgery),
+    p25_cost_during_surgery = quantile(total_cost_during_surgery, 0.25),
+    p75_cost_during_surgery = quantile(total_cost_during_surgery, 0.75),
+    mean_cost_during_surgery = mean(total_cost_during_surgery),
+    SD_cost_during_surgery = sd(total_cost_during_surgery),   
+    median_cost_after_surgery = median(total_cost_after_surgery),
+    p25_cost_after_surgery = quantile(total_cost_after_surgery, 0.25),
+    p75_cost_after_surgery = quantile(total_cost_after_surgery, 0.75),
+    mean_cost_after_surgery = mean(total_cost_after_surgery),
+    SD_cost_after_surgery = sd(total_cost_after_surgery),
+    median_cost_after_surgery_per_person_year = median(total_cost_after_surgery_per_person_year),
+    p25_cost_after_surgery_per_person_year = quantile(total_cost_after_surgery_per_person_year, 0.25),
+    p75_cost_after_surgery_per_person_year = quantile(total_cost_after_surgery_per_person_year, 0.75),
+    mean_cost_after_surgery_per_person_year = mean(total_cost_after_surgery_per_person_year),
+    SD_cost_after_surgery_per_person_year = sd(total_cost_after_surgery_per_person_year)
+  )
+ED_IP_cost_utilization
+
+
+
+
+# Individual values for Wilcoxon signed rank test
+ED_IP_cost_utilization_individual_values_for_Wilcoxon <- TSC_refractory_epilepsy %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>% 
+  filter(follow_up_1_y_before_1_y_after_surgery == "yes") %>% 
+  filter(epilepsy_surgery_total_number == 1) %>% 
+  select(Medical_Record_Number) %>% 
+  left_join(TSC_refractory_epilepsy_healthcare_utilization, by = "Medical_Record_Number") %>% 
+  filter(epilepsy_surgery_yes_no == "yes") %>% 
+  mutate(ED_visit_before_surgery = case_when(
+    ( (Patient_Type_Title == "ED Visit") & (Discharge_Date < first_epilepsy_surgery_date) & (Discharge_Date >= first_refractory_epilepsy_diagnosis) ) ~ 1,
+    TRUE ~ 0),
+    ED_visit_after_surgery = case_when(
+    ( (Patient_Type_Title == "ED Visit") & (Discharge_Date > first_epilepsy_surgery_date) ) ~ 1,
+    TRUE ~ 0),
+    hospital_admission_before_surgery  = case_when(
+    ( ( (Patient_Type_Title == "Inpatient") | (Patient_Type_Title == "Obs Unit") ) & (Discharge_Date < first_epilepsy_surgery_date) & (Discharge_Date >= first_refractory_epilepsy_diagnosis) ) ~ 1,
+    TRUE ~ 0),
+    hospital_admission_after_surgery  = case_when(
+    ( ( (Patient_Type_Title == "Inpatient") | (Patient_Type_Title == "Obs Unit") ) & (Discharge_Date > first_epilepsy_surgery_date) ) ~ 1,
+    TRUE ~ 0),
+    hospital_admission_LOS_before_surgery = case_when(
+    ( ( (Patient_Type_Title == "Inpatient") | (Patient_Type_Title == "Obs Unit") ) & (Discharge_Date < first_epilepsy_surgery_date) & (Discharge_Date >= first_refractory_epilepsy_diagnosis) ) ~ Length_Of_Stay,
+    TRUE ~ 0),
+    hospital_admission_LOS_after_surgery = case_when(
+    ( ( (Patient_Type_Title == "Inpatient") | (Patient_Type_Title == "Obs Unit") ) & (Discharge_Date > first_epilepsy_surgery_date) ) ~ Length_Of_Stay,
+    TRUE ~ 0)    
+    ) %>% 
+  mutate(cost_before_surgery = case_when(
+    ( (Discharge_Date < first_epilepsy_surgery_date) & (Discharge_Date >= first_refractory_epilepsy_diagnosis) ) ~ Adj_Est_Cost,
+    TRUE ~ 0),
+    cost_during_surgery = case_when(
+    (Discharge_Date == first_epilepsy_surgery_date) ~ Adj_Est_Cost,
+    TRUE ~ 0),    
+    cost_after_surgery = case_when(
+    (Discharge_Date > first_epilepsy_surgery_date) ~ Adj_Est_Cost,
+    TRUE ~ 0)   
+    ) %>% 
+  group_by(Medical_Record_Number) %>% 
+  mutate(total_ED_visits_before_surgery = sum(ED_visit_before_surgery),
+         total_ED_visits_before_surgery_per_person_year = total_ED_visits_before_surgery/person_years_refractory_epilepsy_to_surgery,
+         total_ED_visits_after_surgery = sum(ED_visit_after_surgery),
+         total_ED_visits_after_surgery_per_person_year = total_ED_visits_after_surgery/person_years_surgery_to_last_encounter,
+         total_hospital_admission_before_surgery = sum(hospital_admission_before_surgery),
+         total_hospital_admission_before_surgery_per_person_year = total_hospital_admission_before_surgery/person_years_refractory_epilepsy_to_surgery,
+         total_hospital_admission_after_surgery = sum(hospital_admission_after_surgery),
+         total_hospital_admission_after_surgery_per_person_year = total_hospital_admission_after_surgery/person_years_surgery_to_last_encounter,
+         total_hospital_admission_LOS_before_surgery = sum(hospital_admission_LOS_before_surgery),
+         total_hospital_admission_LOS_before_surgery_per_person_year = total_hospital_admission_LOS_before_surgery/person_years_refractory_epilepsy_to_surgery,
+         total_hospital_admission_LOS_after_surgery = sum(hospital_admission_LOS_after_surgery),
+         total_hospital_admission_LOS_after_surgery_per_person_year = total_hospital_admission_LOS_after_surgery/person_years_surgery_to_last_encounter
+         ) %>% 
+  mutate(total_cost_before_surgery = sum(cost_before_surgery, na.rm=TRUE),
+         total_cost_before_surgery_per_person_year = total_cost_before_surgery/person_years_refractory_epilepsy_to_surgery,
+         total_cost_during_surgery = sum(cost_during_surgery, na.rm=TRUE),
+         total_cost_after_surgery = sum(cost_after_surgery, na.rm=TRUE),
+         total_cost_after_surgery_per_person_year = total_cost_after_surgery/person_years_surgery_to_last_encounter
+         ) %>% 
+  ungroup() %>% 
+  distinct(Medical_Record_Number, .keep_all=TRUE)
+ED_IP_cost_utilization_individual_values_for_Wilcoxon
+
+
+
+
+# Wilcoxon signed rank test: person-years of follow-up before and after surgery
+wilcox.test(ED_IP_cost_utilization_individual_values_for_Wilcoxon$person_years_refractory_epilepsy_to_surgery, ED_IP_cost_utilization_individual_values_for_Wilcoxon$person_years_surgery_to_last_encounter, alternative="two.sided", paired=TRUE, exact=TRUE)
+wilcoxon_person_years_before_after_surgery_p_value <- wilcox.test(ED_IP_cost_utilization_individual_values_for_Wilcoxon$person_years_refractory_epilepsy_to_surgery, ED_IP_cost_utilization_individual_values_for_Wilcoxon$person_years_surgery_to_last_encounter, alternative="two.sided", paired=TRUE, exact=TRUE)$p.value
+
+
+
+
+# Wilcoxon signed rank test: emergency department visits
+wilcox.test(ED_IP_cost_utilization_individual_values_for_Wilcoxon$total_ED_visits_before_surgery, ED_IP_cost_utilization_individual_values_for_Wilcoxon$total_ED_visits_after_surgery, alternative="two.sided", paired=TRUE, exact=TRUE)
+wilcoxon_ED_visit_before_after_surgery_p_value <- wilcox.test(ED_IP_cost_utilization_individual_values_for_Wilcoxon$total_ED_visits_before_surgery, ED_IP_cost_utilization_individual_values_for_Wilcoxon$total_ED_visits_after_surgery, alternative="two.sided", paired=TRUE, exact=TRUE)$p.value
+
+
+
+
+# Wilcoxon signed rank test: emergency department visits per person-year
+wilcox.test(ED_IP_cost_utilization_individual_values_for_Wilcoxon$total_ED_visits_before_surgery_per_person_year, ED_IP_cost_utilization_individual_values_for_Wilcoxon$total_ED_visits_after_surgery_per_person_year, alternative="two.sided", paired=TRUE, exact=TRUE)
+wilcoxon_ED_visit_per_person_year_before_after_surgery_p_value <- wilcox.test(ED_IP_cost_utilization_individual_values_for_Wilcoxon$total_ED_visits_before_surgery_per_person_year, ED_IP_cost_utilization_individual_values_for_Wilcoxon$total_ED_visits_after_surgery_per_person_year, alternative="two.sided", paired=TRUE, exact=TRUE)$p.value
+
+
+
+
+# Wilcoxon signed rank test: hospital admissions
+wilcox.test(ED_IP_cost_utilization_individual_values_for_Wilcoxon$total_hospital_admission_before_surgery, ED_IP_cost_utilization_individual_values_for_Wilcoxon$total_hospital_admission_after_surgery, alternative="two.sided", paired=TRUE, exact=TRUE)
+wilcoxon_hospitalization_before_after_surgery_p_value <- wilcox.test(ED_IP_cost_utilization_individual_values_for_Wilcoxon$total_hospital_admission_before_surgery, ED_IP_cost_utilization_individual_values_for_Wilcoxon$total_hospital_admission_after_surgery, alternative="two.sided", paired=TRUE, exact=TRUE)$p.value
+
+
+
+
+# Wilcoxon signed rank test: hospital admissions per person-year
+wilcox.test(ED_IP_cost_utilization_individual_values_for_Wilcoxon$total_hospital_admission_before_surgery_per_person_year, ED_IP_cost_utilization_individual_values_for_Wilcoxon$total_hospital_admission_after_surgery_per_person_year, alternative="two.sided", paired=TRUE, exact=TRUE)
+wilcoxon_hospitalization_per_person_year_before_after_surgery_p_value <- wilcox.test(ED_IP_cost_utilization_individual_values_for_Wilcoxon$total_hospital_admission_before_surgery_per_person_year, ED_IP_cost_utilization_individual_values_for_Wilcoxon$total_hospital_admission_after_surgery_per_person_year, alternative="two.sided", paired=TRUE, exact=TRUE)$p.value
+
+
+
+
+
+# Wilcoxon signed rank test: length of stay
+wilcox.test(ED_IP_cost_utilization_individual_values_for_Wilcoxon$total_hospital_admission_LOS_before_surgery, ED_IP_cost_utilization_individual_values_for_Wilcoxon$total_hospital_admission_LOS_after_surgery, alternative="two.sided", paired=TRUE, exact=TRUE)
+wilcoxon_LOS_before_after_surgery_p_value <- wilcox.test(ED_IP_cost_utilization_individual_values_for_Wilcoxon$total_hospital_admission_LOS_before_surgery, ED_IP_cost_utilization_individual_values_for_Wilcoxon$total_hospital_admission_LOS_after_surgery, alternative="two.sided", paired=TRUE, exact=TRUE)$p.value
+
+
+
+
+# Wilcoxon signed rank test: length of stay per person-year
+wilcox.test(ED_IP_cost_utilization_individual_values_for_Wilcoxon$total_hospital_admission_LOS_before_surgery_per_person_year, ED_IP_cost_utilization_individual_values_for_Wilcoxon$total_hospital_admission_LOS_after_surgery_per_person_year, alternative="two.sided", paired=TRUE, exact=TRUE)
+wilcoxon_LOS_per_person_year_before_after_surgery_p_value <- wilcox.test(ED_IP_cost_utilization_individual_values_for_Wilcoxon$total_hospital_admission_LOS_before_surgery_per_person_year, ED_IP_cost_utilization_individual_values_for_Wilcoxon$total_hospital_admission_LOS_after_surgery_per_person_year, alternative="two.sided", paired=TRUE, exact=TRUE)$p.value
+
+
+
+
+# Wilcoxon signed rank test: cost
+wilcox.test(ED_IP_cost_utilization_individual_values_for_Wilcoxon$total_cost_before_surgery, ED_IP_cost_utilization_individual_values_for_Wilcoxon$total_cost_after_surgery, alternative="two.sided", paired=TRUE, exact=TRUE)
+wilcoxon_cost_before_after_surgery_p_value <- wilcox.test(ED_IP_cost_utilization_individual_values_for_Wilcoxon$total_cost_before_surgery, ED_IP_cost_utilization_individual_values_for_Wilcoxon$total_cost_after_surgery, alternative="two.sided", paired=TRUE, exact=TRUE)$p.value
+
+
+
+
+# Wilcoxon signed rank test: cost per person-year
+wilcox.test(ED_IP_cost_utilization_individual_values_for_Wilcoxon$total_cost_before_surgery_per_person_year, ED_IP_cost_utilization_individual_values_for_Wilcoxon$total_cost_after_surgery_per_person_year, alternative="two.sided", paired=TRUE, exact=TRUE)
+wilcoxon_cost_per_person_year_before_after_surgery_p_value <- wilcox.test(ED_IP_cost_utilization_individual_values_for_Wilcoxon$total_cost_before_surgery_per_person_year, ED_IP_cost_utilization_individual_values_for_Wilcoxon$total_cost_after_surgery_per_person_year, alternative="two.sided", paired=TRUE, exact=TRUE)$p.value
+
+
+
+
+# Prepare the data for the figure
+outcomes_differences_boxplot_data <- tibble(
+  before_after_surgery = factor(c(rep("Before",  nrow(ED_IP_cost_utilization_individual_values_for_Wilcoxon)), rep("After",  nrow(ED_IP_cost_utilization_individual_values_for_Wilcoxon))), levels=c("Before", "After")),
+  ED_visits_per_person_year = c(ED_IP_cost_utilization_individual_values_for_Wilcoxon$total_ED_visits_before_surgery_per_person_year, ED_IP_cost_utilization_individual_values_for_Wilcoxon$total_ED_visits_after_surgery_per_person_year),
+  hospital_admissions_per_person_year = c(ED_IP_cost_utilization_individual_values_for_Wilcoxon$total_hospital_admission_before_surgery_per_person_year, ED_IP_cost_utilization_individual_values_for_Wilcoxon$total_hospital_admission_after_surgery_per_person_year),
+  hospital_admission_lenght_of_stay_per_person_year = c(ED_IP_cost_utilization_individual_values_for_Wilcoxon$total_hospital_admission_LOS_before_surgery_per_person_year, ED_IP_cost_utilization_individual_values_for_Wilcoxon$total_hospital_admission_LOS_after_surgery_per_person_year),  
+  cost_per_person_year = c(ED_IP_cost_utilization_individual_values_for_Wilcoxon$total_cost_before_surgery_per_person_year, ED_IP_cost_utilization_individual_values_for_Wilcoxon$total_cost_after_surgery_per_person_year)
+) 
+outcomes_differences_boxplot_data
+
+
+
+
+# Figure boxplot emergency department visits
+outcomes_differences_boxplot_ED_plot <- ggplot(data=outcomes_differences_boxplot_data,
+       aes(x=before_after_surgery, y=ED_visits_per_person_year)) +
+  geom_boxplot(lwd=1.5, color="darkgreen") +
+  theme(legend.position="none", panel.background=element_blank(), panel.grid.major=element_blank(),
+        panel.grid.minor=element_blank(), panel.border=element_blank(), axis.ticks=element_blank(),
+        axis.text=element_text(size=14, face="bold"), axis.text.x=element_text(angle=45, hjust=1),
+        axis.title=element_text(size=20, face="bold"),
+  axis.title.x=element_text(margin=margin(t=10, r=10, b=10, l=10)),
+  axis.title.y=element_text(margin=margin(t=10, r=10, b=10, l=10))) +
+  scale_x_discrete(name="Before or after surgery") +
+  scale_y_continuous(name="ED visits per person-year", breaks=c(0, 2, 4, 6, 8), limits = c(0, 8))
+outcomes_differences_boxplot_ED_plot
+
+
+
+
+# Figure boxplot hospital admissions
+outcomes_differences_boxplot_hospital_admissions_plot <- ggplot(data=outcomes_differences_boxplot_data,
+       aes(x=before_after_surgery, y=hospital_admissions_per_person_year)) +
+  geom_boxplot(lwd=1.5, color="darkgreen") +
+  theme(legend.position="none", panel.background=element_blank(), panel.grid.major=element_blank(),
+        panel.grid.minor=element_blank(), panel.border=element_blank(), axis.ticks=element_blank(),
+        axis.text=element_text(size=14, face="bold"), axis.text.x=element_text(angle=45, hjust=1),
+        axis.title=element_text(size=20, face="bold"),
+  axis.title.x=element_text(margin=margin(t=10, r=10, b=10, l=10)),
+  axis.title.y=element_text(margin=margin(t=10, r=10, b=10, l=10))) +
+  scale_x_discrete(name="Before or after surgery") +
+  scale_y_continuous(name="Admissions per person-year", breaks=c(0, 2, 4, 6), limits = c(0, 6))
+outcomes_differences_boxplot_hospital_admissions_plot
+
+
+
+
+# Figure boxplot hospital length of stay
+outcomes_differences_boxplot_hospital_LOS_plot <- ggplot(data=outcomes_differences_boxplot_data,
+       aes(x=before_after_surgery, y=hospital_admission_lenght_of_stay_per_person_year)) +
+  geom_boxplot(lwd=1.5, color="darkgreen") +
+  theme(legend.position="none", panel.background=element_blank(), panel.grid.major=element_blank(),
+        panel.grid.minor=element_blank(), panel.border=element_blank(), axis.ticks=element_blank(),
+        axis.text=element_text(size=14, face="bold"), axis.text.x=element_text(angle=45, hjust=1),
+        axis.title=element_text(size=20, face="bold"),
+  axis.title.x=element_text(margin=margin(t=10, r=10, b=10, l=10)),
+  axis.title.y=element_text(margin=margin(t=10, r=10, b=10, l=10))) +
+  scale_x_discrete(name="Before or after surgery") +
+  scale_y_continuous(name="LOS per person-year", breaks=c(0, 10, 20, 30, 40, 50), limits = c(0, 50))
+outcomes_differences_boxplot_hospital_LOS_plot
+
+
+
+
+# Figure boxplot hospital length of stay
+outcomes_differences_boxplot_cost_plot <- ggplot(data=outcomes_differences_boxplot_data,
+       aes(x=before_after_surgery, y=cost_per_person_year)) +
+  geom_boxplot(lwd=1.5, color="darkgreen") +
+  theme(legend.position="none", panel.background=element_blank(), panel.grid.major=element_blank(),
+        panel.grid.minor=element_blank(), panel.border=element_blank(), axis.ticks=element_blank(),
+        axis.text=element_text(size=14, face="bold"), axis.text.x=element_text(angle=45, hjust=1),
+        axis.title=element_text(size=20, face="bold"),
+  axis.title.x=element_text(margin=margin(t=10, r=10, b=10, l=10)),
+  axis.title.y=element_text(margin=margin(t=10, r=10, b=10, l=10))) +
+  scale_x_discrete(name="Before or after surgery") +
+  scale_y_continuous(name="Cost per person-year ($)", breaks=c(0, 100000, 200000, 300000), limits = c(0, 350000), labels = scales::comma)
+outcomes_differences_boxplot_cost_plot
+```
+
+
+
+
+
+
+
+
+## 6. Generalized estimating equation
+
+
+
+
+Generalized estimating equation
+```{r}
+# Prepare database for regression
+TSC_refractory_epilepsy_for_regression <- TSC_refractory_epilepsy_healthcare_utilization %>% 
+  group_by(Medical_Record_Number) %>% 
+  filter(Discharge_Date == first_refractory_epilepsy_diagnosis) %>%   
+  ungroup() %>%   
+  distinct(Medical_Record_Number, .keep_all=TRUE) %>% 
+  group_by(Hospital_Name) %>% 
+  mutate(patients_from_this_hospital = n()
+  ) %>% 
+  ungroup() %>% 
+  mutate(
+    epilepsy_surgery_numeric = case_when(
+      (epilepsy_surgery_yes_no == "yes") ~ 1,
+      TRUE ~ 0),
+    age_first_refractory_epilepsy = as.numeric(first_refractory_epilepsy_diagnosis - DOB)/ 365.24219,
+    urban = case_when(
+      (Urban_Flag == 1) ~ "yes",
+      TRUE ~ "no"),
+  income = case_when(
+    (Predicted_Median_Household_Income > 0) ~ Predicted_Median_Household_Income,
+    TRUE ~ NA),
+  hospital_size = factor(case_when(
+    (patients_from_this_hospital >= 20) ~ "large",
+    TRUE ~ "small")),
+  income_in_ten_thousands = income/10000
+  ) %>% 
+  arrange(hospital_size) %>% 
+  select(epilepsy_surgery_numeric, age_first_refractory_epilepsy, Gender_Title, race, Ethnicity_Title, Census_Region, payer, income_in_ten_thousands, hospital_size)
+TSC_refractory_epilepsy_for_regression
+  
+
+
+
+# Generalized estimating equation logistic regression: https://norcalbiostat.github.io/AppliedStatistics_notes/specifying-correlation-structures.html
+generalized_estimating_equation_logistic_regression <- geeglm(epilepsy_surgery_numeric ~ age_first_refractory_epilepsy + Gender_Title + relevel(factor(race), ref="White") + relevel(factor(Ethnicity_Title), ref="Not Hispanic or Latino") + relevel(factor(Census_Region), ref="South") + relevel(factor(payer), ref="public") + income_in_ten_thousands, id=hospital_size, data=na.omit(TSC_refractory_epilepsy_for_regression), family="binomial", corstr="exchangeable")
+
+
+
+
+# Summary of results: https://cran.r-project.org/web/packages/HSAUR2/vignettes/Ch_analysing_longitudinal_dataII.pdf
+summary(generalized_estimating_equation_logistic_regression)
+
+
+# Age
+age_OR <- exp( summary(generalized_estimating_equation_logistic_regression)$coefficients["age_first_refractory_epilepsy", "Estimate"] + ( summary(generalized_estimating_equation_logistic_regression)$coefficients["age_first_refractory_epilepsy", "Std.err"] * qnorm(c(0.025, 0.5, 0.975)) ) )
+age_OR_lower <- age_OR[1]
+age_OR_middle <- age_OR[2]
+age_OR_upper <- age_OR[3]
+age_OR_lower
+age_OR_middle
+age_OR_upper
+regression_age_p_value <- summary(generalized_estimating_equation_logistic_regression)$coefficients["age_first_refractory_epilepsy", "Pr(>|W|)"]
+regression_age_p_value
+
+
+# Male
+male_OR <- exp( summary(generalized_estimating_equation_logistic_regression)$coefficients["Gender_TitleMale", "Estimate"] + ( summary(generalized_estimating_equation_logistic_regression)$coefficients["Gender_TitleMale", "Std.err"] * qnorm(c(0.025, 0.5, 0.975)) ) )
+male_OR_lower <- male_OR[1]
+male_OR_middle <- male_OR[2]
+male_OR_upper <- male_OR[3]
+male_OR_lower
+male_OR_middle
+male_OR_upper
+regression_male_p_value <- summary(generalized_estimating_equation_logistic_regression)$coefficients["Gender_TitleMale", "Pr(>|W|)"]
+regression_male_p_value
+
+
+# Asian
+Asian_OR <- exp( summary(generalized_estimating_equation_logistic_regression)$coefficients['relevel(factor(race), ref = "White")Asian', "Estimate"] + ( summary(generalized_estimating_equation_logistic_regression)$coefficients['relevel(factor(race), ref = "White")Asian', "Std.err"] * qnorm(c(0.025, 0.5, 0.975)) ) )
+Asian_OR_lower <- Asian_OR[1]
+Asian_OR_middle <- Asian_OR[2]
+Asian_OR_upper <- Asian_OR[3]
+Asian_OR_lower
+Asian_OR_middle
+Asian_OR_upper
+regression_asian_p_value <- summary(generalized_estimating_equation_logistic_regression)$coefficients['relevel(factor(race), ref = "White")Asian', "Pr(>|W|)"]
+regression_asian_p_value
+
+
+# Black
+Black_OR <- exp( summary(generalized_estimating_equation_logistic_regression)$coefficients['relevel(factor(race), ref = "White")Black', "Estimate"] + ( summary(generalized_estimating_equation_logistic_regression)$coefficients['relevel(factor(race), ref = "White")Black', "Std.err"] * qnorm(c(0.025, 0.5, 0.975)) ) )
+Black_OR_lower <- Black_OR[1]
+Black_OR_middle <- Black_OR[2]
+Black_OR_upper <- Black_OR[3]
+Black_OR_lower
+Black_OR_middle
+Black_OR_upper
+regression_black_p_value <- summary(generalized_estimating_equation_logistic_regression)$coefficients['relevel(factor(race), ref = "White")Black', "Pr(>|W|)"]
+regression_black_p_value
+
+
+# American Indian
+American_Indian_OR <- exp( summary(generalized_estimating_equation_logistic_regression)$coefficients['relevel(factor(race), ref = "White")American_Indian', "Estimate"] + ( summary(generalized_estimating_equation_logistic_regression)$coefficients['relevel(factor(race), ref = "White")American_Indian', "Std.err"] * qnorm(c(0.025, 0.5, 0.975)) ) )
+American_Indian_OR_lower <- American_Indian_OR[1]
+American_Indian_OR_middle <- American_Indian_OR[2]
+American_Indian_OR_upper <- American_Indian_OR[3]
+American_Indian_OR_lower
+American_Indian_OR_middle
+American_Indian_OR_upper
+regression_indian_p_value <- summary(generalized_estimating_equation_logistic_regression)$coefficients['relevel(factor(race), ref = "White")American_Indian', "Pr(>|W|)"]
+regression_indian_p_value
+
+
+# Other race
+Other_race_OR <- exp( summary(generalized_estimating_equation_logistic_regression)$coefficients['relevel(factor(race), ref = "White")Other/unknown', "Estimate"] + ( summary(generalized_estimating_equation_logistic_regression)$coefficients['relevel(factor(race), ref = "White")Other/unknown', "Std.err"] * qnorm(c(0.025, 0.5, 0.975)) ) )
+Other_race_OR_lower <- Other_race_OR[1]
+Other_race_OR_middle <- Other_race_OR[2]
+Other_race_OR_upper <- Other_race_OR[3]
+Other_race_OR_lower
+Other_race_OR_middle
+Other_race_OR_upper
+regression_other_race_p_value <- summary(generalized_estimating_equation_logistic_regression)$coefficients['relevel(factor(race), ref = "White")Other/unknown', "Pr(>|W|)"]
+regression_other_race_p_value
+
+
+# Hispanic
+Hispanic_OR <- exp( summary(generalized_estimating_equation_logistic_regression)$coefficients['relevel(factor(Ethnicity_Title), ref = "Not Hispanic or Latino")Hispanic or Latino', "Estimate"] + ( summary(generalized_estimating_equation_logistic_regression)$coefficients['relevel(factor(Ethnicity_Title), ref = "Not Hispanic or Latino")Hispanic or Latino', "Std.err"] * qnorm(c(0.025, 0.5, 0.975)) ) )
+Hispanic_OR_lower <- Hispanic_OR[1]
+Hispanic_OR_middle <- Hispanic_OR[2]
+Hispanic_OR_upper <- Hispanic_OR[3]
+Hispanic_OR_lower
+Hispanic_OR_middle
+Hispanic_OR_upper
+regression_hispanic_p_value <- summary(generalized_estimating_equation_logistic_regression)$coefficients['relevel(factor(Ethnicity_Title), ref = "Not Hispanic or Latino")Hispanic or Latino', "Pr(>|W|)"]
+regression_hispanic_p_value
+
+
+# Other ethnicity
+Other_ethnicity_OR <- exp( summary(generalized_estimating_equation_logistic_regression)$coefficients['relevel(factor(Ethnicity_Title), ref = "Not Hispanic or Latino")Unknown', "Estimate"] + ( summary(generalized_estimating_equation_logistic_regression)$coefficients['relevel(factor(Ethnicity_Title), ref = "Not Hispanic or Latino")Unknown', "Std.err"] * qnorm(c(0.025, 0.5, 0.975)) ) )
+Other_ethnicity_OR_lower <- Other_ethnicity_OR[1]
+Other_ethnicity_OR_middle <- Other_ethnicity_OR[2]
+Other_ethnicity_OR_upper <- Other_ethnicity_OR[3]
+Other_ethnicity_OR_lower
+Other_ethnicity_OR_middle
+Other_ethnicity_OR_upper
+regression_other_ethnicity_p_value <- summary(generalized_estimating_equation_logistic_regression)$coefficients['relevel(factor(Ethnicity_Title), ref = "Not Hispanic or Latino")Unknown', "Pr(>|W|)"]
+regression_other_ethnicity_p_value
+
+
+# Northeast
+NorthEast_OR <- exp( summary(generalized_estimating_equation_logistic_regression)$coefficients['relevel(factor(Census_Region), ref = "South")Northeast', "Estimate"] + ( summary(generalized_estimating_equation_logistic_regression)$coefficients['relevel(factor(Census_Region), ref = "South")Northeast', "Std.err"] * qnorm(c(0.025, 0.5, 0.975)) ) )
+NorthEast_OR_lower <- NorthEast_OR[1]
+NorthEast_OR_middle <- NorthEast_OR[2]
+NorthEast_OR_upper <- NorthEast_OR[3]
+NorthEast_OR_lower
+NorthEast_OR_middle
+NorthEast_OR_upper
+regression_northeast_p_value <- summary(generalized_estimating_equation_logistic_regression)$coefficients['relevel(factor(Census_Region), ref = "South")Northeast', "Pr(>|W|)"]
+regression_northeast_p_value
+
+
+# Midwest
+MidWest_OR <- exp( summary(generalized_estimating_equation_logistic_regression)$coefficients['relevel(factor(Census_Region), ref = "South")Midwest', "Estimate"] + ( summary(generalized_estimating_equation_logistic_regression)$coefficients['relevel(factor(Census_Region), ref = "South")Midwest', "Std.err"] * qnorm(c(0.025, 0.5, 0.975)) ) )
+MidWest_OR_lower <- MidWest_OR[1]
+MidWest_OR_middle <- MidWest_OR[2]
+MidWest_OR_upper <- MidWest_OR[3]
+MidWest_OR_lower
+MidWest_OR_middle
+MidWest_OR_upper
+regression_midwest_p_value <- summary(generalized_estimating_equation_logistic_regression)$coefficients['relevel(factor(Census_Region), ref = "South")Midwest', "Pr(>|W|)"]
+regression_midwest_p_value
+
+
+# West
+West_OR <- exp( summary(generalized_estimating_equation_logistic_regression)$coefficients['relevel(factor(Census_Region), ref = "South")West', "Estimate"] + ( summary(generalized_estimating_equation_logistic_regression)$coefficients['relevel(factor(Census_Region), ref = "South")West', "Std.err"] * qnorm(c(0.025, 0.5, 0.975)) ) )
+West_OR_lower <- West_OR[1]
+West_OR_middle <- West_OR[2]
+West_OR_upper <- West_OR[3]
+West_OR_lower
+West_OR_middle
+West_OR_upper
+regression_west_p_value <- summary(generalized_estimating_equation_logistic_regression)$coefficients['relevel(factor(Census_Region), ref = "South")West', "Pr(>|W|)"]
+regression_west_p_value
+
+
+# Payer
+private_OR <- exp( summary(generalized_estimating_equation_logistic_regression)$coefficients['relevel(factor(payer), ref = "public")private', "Estimate"] + ( summary(generalized_estimating_equation_logistic_regression)$coefficients['relevel(factor(payer), ref = "public")private', "Std.err"] * qnorm(c(0.025, 0.5, 0.975)) ) )
+private_OR_lower <- private_OR[1]
+private_OR_middle <- private_OR[2]
+private_OR_upper <- private_OR[3]
+private_OR_lower
+private_OR_middle
+private_OR_upper
+regression_private_p_value <- summary(generalized_estimating_equation_logistic_regression)$coefficients['relevel(factor(payer), ref = "public")private', "Pr(>|W|)"]
+regression_private_p_value
+
+
+# Payer
+other_payer_OR <- exp( summary(generalized_estimating_equation_logistic_regression)$coefficients['relevel(factor(payer), ref = "public")other/unknown', "Estimate"] + ( summary(generalized_estimating_equation_logistic_regression)$coefficients['relevel(factor(payer), ref = "public")other/unknown', "Std.err"] * qnorm(c(0.025, 0.5, 0.975)) ) )
+other_payer_OR_lower <- other_payer_OR[1]
+other_payer_OR_middle <- other_payer_OR[2]
+other_payer_OR_upper <- other_payer_OR[3]
+other_payer_OR_lower
+other_payer_OR_middle
+other_payer_OR_upper
+regression_other_unknown_payer_p_value <- summary(generalized_estimating_equation_logistic_regression)$coefficients['relevel(factor(payer), ref = "public")other/unknown', "Pr(>|W|)"]
+regression_other_unknown_payer_p_value
+
+
+# Income
+income_OR <- exp( summary(generalized_estimating_equation_logistic_regression)$coefficients["income_in_ten_thousands", "Estimate"] + ( summary(generalized_estimating_equation_logistic_regression)$coefficients["income_in_ten_thousands", "Std.err"] * qnorm(c(0.025, 0.5, 0.975)) ) )
+income_OR_lower <- income_OR[1]
+income_OR_middle <- income_OR[2]
+income_OR_upper <- income_OR[3]
+income_OR_lower
+income_OR_middle
+income_OR_upper
+regression_income_p_value <- summary(generalized_estimating_equation_logistic_regression)$coefficients["income_in_ten_thousands", "Pr(>|W|)"]
+regression_income_p_value
+
+
+
+
+# Prepare data for the forest plot   
+##https://rpubs.com/mbounthavong/forest_plots_r
+regression_data_for_forest_plot <- tibble(
+  Index = c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14),
+  label = c("Age (each additional year)", "Male sex", "Asian race", "Black race", "American Indian race", "Other/unknown race", "Hispanic/latino ethnicity", "Unknown ethnicity", "NorthEast region", "MidWest region", "West region", "Private payer", "Other/unknown payer", "Income (each additional $10,000)"),
+  OR = c(age_OR_middle, male_OR_middle, Asian_OR_middle, Black_OR_middle, American_Indian_OR_middle, Other_race_OR_middle, Hispanic_OR_middle, Other_ethnicity_OR_middle, NorthEast_OR_middle, MidWest_OR_middle, West_OR_middle, private_OR_middle, other_payer_OR_middle, income_OR_middle),
+  LL = c(age_OR_lower, male_OR_lower, Asian_OR_lower, Black_OR_lower, American_Indian_OR_lower, Other_race_OR_lower, Hispanic_OR_lower, Other_ethnicity_OR_lower, NorthEast_OR_lower, MidWest_OR_lower, West_OR_lower, private_OR_lower, other_payer_OR_lower, income_OR_lower),
+  UL = c(age_OR_upper, male_OR_upper, Asian_OR_upper, Black_OR_upper, American_Indian_OR_upper, Other_race_OR_upper, Hispanic_OR_upper, Other_ethnicity_OR_upper, NorthEast_OR_upper, MidWest_OR_upper, West_OR_upper, private_OR_upper, other_payer_OR_upper, income_OR_upper)
+)
+regression_data_for_forest_plot
+
+
+
+
+# Forest plot
+regression_forest_plot <- ggplot(regression_data_for_forest_plot, aes(x=OR, y=Index)) +
+  geom_point(shape=18, size=3, color="navy") +  
+  geom_errorbarh(aes(xmin=LL, xmax=UL), height = 0.25, color="navy") +
+  geom_vline(xintercept=1, color="red", linetype="dashed", cex=1, alpha=0.5) +
+  scale_x_continuous(limits=c(0.3, 1.7), breaks=c(0.2, 0.4, 0.6, 0.8, 1, 1.2, 1.4, 1.6)) +
+  scale_y_continuous(name="", breaks=1:14, labels=regression_data_for_forest_plot$label, trans="reverse") +
+  xlab("Odds Ratio (95% confidence interval)") + 
+  ylab(" ") + 
+  theme_bw() +
+  theme(panel.border = element_blank(),
+        panel.background = element_blank(),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        axis.ticks=element_blank(),
+        axis.line = element_blank(),
+        axis.text.y = element_text(size=12, color="black", face="bold"),
+        axis.text.x.bottom = element_text(size=12, color="black", face="bold"),
+        axis.title.x = element_text(size=12, color="black", face="bold", margin=margin(t=10, r=10, b=10, l=10)))
+regression_forest_plot
+```
+
+
+
+
+
+
+
+
+## 7. Adjustment for multiple comparisons
+
+
+
+
+Adjustment for multiple comparisons 
+```{r}
+# Unadjusted p-values
+unadjusted_p_values <- c(jonckheere_epilepsy_surgery_absolute_number_over_3_year_periods_increasing_p_value,
+                         jonckheere_epilepsy_surgery_absolute_number_over_3_year_periods_decreasing_p_value,
+                         jonckheere_epilepsy_surgery_per_person_year_over_3_year_periods_increasing_p_value,
+                         jonckheere_epilepsy_surgery_per_person_year_over_3_year_periods_decreasing_p_value,
+                         jonckheere_age_at_first_epilepsy_surgery_over_the_years_per_3_year_periods_increasing_p_value,
+                         jonckheere_age_at_first_epilepsy_surgery_over_the_years_per_3_year_periods_decreasing_p_value,
+                         jonckheere_epilepsy_surgery_absolute_number_without_long_term_follow_up_over_3_year_periods_increasing_p_value,
+                         jonckheere_epilepsy_surgery_absolute_number_without_long_term_follow_up_over_3_year_periods_decreasing_p_value,
+                         jonckheere_age_at_first_epilepsy_surgery_over_the_years_without_long_follow_up_per_3_year_periods_increasing_p_value,
+                         jonckheere_age_at_first_epilepsy_surgery_over_the_years_without_long_follow_up_per_3_year_periods_decreasing_p_value,
+                         wilcoxon_person_years_before_after_surgery_p_value,
+                         wilcoxon_ED_visit_before_after_surgery_p_value,
+                         wilcoxon_ED_visit_per_person_year_before_after_surgery_p_value,
+                         wilcoxon_hospitalization_before_after_surgery_p_value,
+                         wilcoxon_hospitalization_per_person_year_before_after_surgery_p_value,
+                         wilcoxon_LOS_before_after_surgery_p_value,
+                         wilcoxon_LOS_per_person_year_before_after_surgery_p_value,
+                         wilcoxon_cost_before_after_surgery_p_value,
+                         wilcoxon_cost_per_person_year_before_after_surgery_p_value,
+                         regression_age_p_value,
+                         regression_male_p_value,
+                         regression_asian_p_value,
+                         regression_black_p_value,
+                         regression_indian_p_value,
+                         regression_other_race_p_value,
+                         regression_hispanic_p_value,
+                         regression_other_ethnicity_p_value,
+                         regression_northeast_p_value,
+                         regression_midwest_p_value,
+                         regression_west_p_value,
+                         regression_private_p_value,
+                         regression_other_unknown_payer_p_value,
+                         regression_income_p_value)
+
+
+
+
+# Adjusted p-values
+adjusted_p_values <- p.adjust(unadjusted_p_values, "BH") 
+adjusted_p_values
+```
