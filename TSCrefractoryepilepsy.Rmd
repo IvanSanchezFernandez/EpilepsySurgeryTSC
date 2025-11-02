@@ -2027,6 +2027,17 @@ intracranial_neurostimulator_first_epilepsy_surgery_subsequent_surgeries <- TSC_
             intracranial_neurostimulators = sum(intracranial_neurostimulator=="yes"),
             total = n())
 intracranial_neurostimulator_first_epilepsy_surgery_subsequent_surgeries
+
+
+
+
+# Combined surgeries
+combined_surgeries <- TSC_refractory_epilepsy %>% 
+  select(lobectomy, hemispherectomy, other_excision_or_disconnection_or_destruction, LITT, intracranial_neurostimulator) %>% 
+  rowwise() %>% 
+  mutate(yes_count = sum(c_across(everything()) == "yes")) %>% 
+  filter(yes_count > 1) %>% 
+  ungroup()
 ```
 
 
